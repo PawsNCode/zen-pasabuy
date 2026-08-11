@@ -14,9 +14,17 @@ const SWEETIES_THEME = {
   ink: "#3a2a33", soft: "#fbf2f8", good: "#5a8a6a",
 };
 const THEME_PRESETS = [
-  { name: "Sweeties 🌸", theme: { ...SWEETIES_THEME } },
-  { name: "Matcha", theme: { primary: "#3d5a3e", accent: "#6b8f5e", pink: "#a3bf8f", muted: "#8a9a7f", bg: "#f4f8ef", bg2: "#e8f0dd", border: "#dce8cd", paper: "#ffffff", ink: "#2a332a", soft: "#eef4e6", good: "#3d7a4e" } },
-  { name: "Yozora", theme: { primary: "#2c2a4a", accent: "#7067cf", pink: "#a29bde", muted: "#8d89a8", bg: "#f3f2fb", bg2: "#e9e7f7", border: "#ddd9f0", paper: "#ffffff", ink: "#26243a", soft: "#efedf9", good: "#4e7a6a" } },
+  /* ── light ── */
+  { name: "Sweeties 🌸", dark: false, theme: { ...SWEETIES_THEME } },
+  { name: "Matcha", dark: false, theme: { primary: "#3d5a3e", accent: "#6b8f5e", pink: "#a3bf8f", muted: "#8a9a7f", bg: "#f4f8ef", bg2: "#e8f0dd", border: "#dce8cd", paper: "#ffffff", ink: "#2a332a", soft: "#eef4e6", good: "#3d7a4e" } },
+  { name: "Yozora", dark: false, theme: { primary: "#2c2a4a", accent: "#7067cf", pink: "#a29bde", muted: "#8d89a8", bg: "#f3f2fb", bg2: "#e9e7f7", border: "#ddd9f0", paper: "#ffffff", ink: "#26243a", soft: "#efedf9", good: "#4e7a6a" } },
+  { name: "Hanami", dark: false, theme: { primary: "#a8365b", accent: "#e0688c", pink: "#f0a8bd", muted: "#b28a95", bg: "#fff6f7", bg2: "#fbe6eb", border: "#f6d8de", paper: "#ffffff", ink: "#3a2530", soft: "#fdeff2", good: "#5a8a6a" } },
+  /* ── dark ── */
+  { name: "Sakura Night", dark: true, theme: { primary: "#d4488f", accent: "#ff7fb6", pink: "#8f5c78", muted: "#a98da0", bg: "#170f1c", bg2: "#221528", border: "#3a2740", paper: "#241a2b", ink: "#f6e8f1", soft: "#2d2036", good: "#63b98c" } },
+  { name: "Sumi Ink", dark: true, theme: { primary: "#c9536e", accent: "#e8798f", pink: "#7c5a63", muted: "#9c9198", bg: "#121214", bg2: "#1b1b1f", border: "#33323a", paper: "#1f1f24", ink: "#efedf0", soft: "#27262d", good: "#5fb08a" } },
+  { name: "Fuji Night", dark: true, theme: { primary: "#5b74c9", accent: "#8ea6f0", pink: "#5d6a92", muted: "#939bb5", bg: "#0f1320", bg2: "#161c2c", border: "#2a3350", paper: "#1a2033", ink: "#e8ecfa", soft: "#212840", good: "#5fb08a" } },
+  { name: "Matcha Night", dark: true, theme: { primary: "#6f9f63", accent: "#96c98a", pink: "#5f7a58", muted: "#93a48d", bg: "#0f150f", bg2: "#161e16", border: "#2b382a", paper: "#1a231a", ink: "#e9f2e7", soft: "#212c20", good: "#7fc78f" } },
+  { name: "Kuro Gold", dark: true, theme: { primary: "#c8a45a", accent: "#e5c684", pink: "#7d6a44", muted: "#a09781", bg: "#111010", bg2: "#1a1817", border: "#37322a", paper: "#201d1a", ink: "#f3eee3", soft: "#282420", good: "#78b58a" } },
 ];
 
 /* order lifecycle colors (consistent across themes so red/blue/green always read) */
@@ -42,13 +50,14 @@ const DEFAULT_SETTINGS = {
     { id: "hunt", name: "Multi-store hunt", feeJpy: 830, note: "Full-day hunting" },
   ],
   theme: { ...SWEETIES_THEME },
+  memory: { shops: [], locations: [], customers: [], products: [] },
 };
 
 const STORAGE_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "6.3.0";
-const APP_UPDATED = "Aug 11, 2026 · 6:51 PM PHT";
+const APP_VERSION = "6.4.0";
+const APP_UPDATED = "Aug 11, 2026 · 6:55 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -215,6 +224,7 @@ export default function ZenPasabuy() {
   const [pQty, setPQty] = useState("1");
   const [pPhoto, setPPhoto] = useState(null);
   const [tierId, setTierId] = useState("basic");
+  const [showMath, setShowMath] = useState(false);
   const [sourceId, setSourceId] = useState("nearby");
 
   /* Orders state */
@@ -326,9 +336,12 @@ export default function ZenPasabuy() {
     const lot = { id: Date.now(), date: pDate || today(), store: pStore.trim(), qty: qtyNum, remaining: qtyNum, totalJpy: totalJpyNum, unitJpy, unitCost: result.trueCost };
     if (restockProduct) {
       setProducts(products.map((p) => (p.id === restockProduct.id ? { ...p, lots: [...p.lots, lot], list: result.list, floor: result.floor, tierName: tier.name, photo: pPhoto || p.photo } : p)));
+      remember("shops", pStore);
       ping(`Restocked ${restockProduct.name} · +${qtyNum} pc(s) 🗻`);
     } else {
       setProducts([{ id: Date.now() + 1, name: pName.trim() || "Untitled find", photo: pPhoto, tierName: tier.name, list: result.list, floor: result.floor, lots: [lot] }, ...products]);
+      remember("shops", pStore);
+      remember("products", pName);
       ping("Product saved with stock 🗻");
     }
     setPName(""); setPStore(""); setPTotalJpy(""); setPQty("1"); setPPhoto(null); setPDate(today()); setPTarget("new");
@@ -380,6 +393,7 @@ export default function ZenPasabuy() {
     }
     if (line.sell <= 0) return ping("Set a selling price first");
     setDraft({ ...draft, lines: [...draft.lines, line] });
+    remember("products", line.name);
     setLineQty("1"); setLineSell(lineProduct ? String(lineProduct.list) : ""); setLineName(""); setLineUnitJpy("");
     ping(lineProduct ? `Reserved ${line.qty} pc(s) from stock` : "Pre-order item added — mark it Bought once you have it");
   };
@@ -409,6 +423,9 @@ export default function ZenPasabuy() {
     if (!draft.lines.length) return ping("Add at least one item to the order");
     setProducts((prods) => applyAllocs(prods, draft.lines, -1));
     setOrders([{ id: Date.now(), ...draft, customer: draft.customer.trim(), status: "open" }, ...orders]);
+    remember("customers", draft.customer);
+    remember("locations", draft.location);
+    remember("products", ...draft.lines.map((l) => l.name));
     setDraft(emptyDraft()); setShowDraft(false);
     ping("Order saved 🌸");
   };
@@ -589,6 +606,23 @@ export default function ZenPasabuy() {
     reader.readAsText(file);
   };
 
+  /* ── remembered entries: shops, locations, customers, product names ── */
+  const uniqSorted = (arr) => [...new Set(arr.map((x) => (x || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const remember = (key, ...vals) => {
+    const clean = vals.map((v) => (v || "").trim()).filter(Boolean);
+    if (!clean.length) return;
+    setSettings((s) => {
+      const mem = { shops: [], locations: [], customers: [], products: [], ...(s.memory || {}) };
+      const next = [...(mem[key] || [])];
+      clean.forEach((v) => { if (!next.some((x) => x.toLowerCase() === v.toLowerCase())) next.push(v); });
+      return { ...s, memory: { ...mem, [key]: next.slice(-300) } };
+    });
+  };
+  const memShops = uniqSorted([...(settings.memory?.shops || []), ...products.flatMap((p) => (p.lots || []).map((l) => l.store))]);
+  const memLocations = uniqSorted([...(settings.memory?.locations || []), ...orders.map((o) => o.location)]);
+  const memCustomers = uniqSorted([...(settings.memory?.customers || []), ...orders.map((o) => o.customer)]);
+  const memProducts = uniqSorted([...(settings.memory?.products || []), ...products.map((p) => p.name), ...orders.flatMap((o) => o.lines.map((l) => l.name))]);
+
   /* hard-refresh the app itself (data lives in storage, so it is kept) */
   const refreshApp = async () => {
     ping("Refreshing to the latest version…");
@@ -670,6 +704,11 @@ export default function ZenPasabuy() {
       `}</style>
 
       <div style={{ maxWidth: 560, margin: "0 auto", padding: "22px 16px 60px" }}>
+        <datalist id="zp-shops">{memShops.map((v) => <option key={v} value={v} />)}</datalist>
+        <datalist id="zp-locations">{memLocations.map((v) => <option key={v} value={v} />)}</datalist>
+        <datalist id="zp-customers">{memCustomers.map((v) => <option key={v} value={v} />)}</datalist>
+        <datalist id="zp-products">{memProducts.map((v) => <option key={v} value={v} />)}</datalist>
+
         <header style={{ marginBottom: 14 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
             <ZenLogo size={46} />
@@ -717,9 +756,9 @@ export default function ZenPasabuy() {
               </select>
               <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
                 {!restockProduct && (
-                  <input value={pName} onChange={(e) => setPName(e.target.value)} placeholder="Product name (e.g., Tokyo Banana 8pc)" style={inputStyle} />
+                  <input value={pName} onChange={(e) => setPName(e.target.value)} placeholder="Product name (e.g., Tokyo Banana 8pc)" list="zp-products" style={inputStyle} />
                 )}
-                <input value={pStore} onChange={(e) => setPStore(e.target.value)} placeholder="Shop (e.g., Don Quijote Shibuya)" style={inputStyle} />
+                <input value={pStore} onChange={(e) => setPStore(e.target.value)} placeholder="Shop (e.g., Don Quijote Shibuya)" list="zp-shops" style={inputStyle} />
                 <div>
                   <span style={{ ...label, fontSize: 9.5, marginBottom: 3 }}>Date bought</span>
                   <input type="date" value={pDate} onChange={(e) => setPDate(e.target.value)} style={{ ...inputStyle, fontSize: 13.5 }} />
@@ -798,6 +837,70 @@ export default function ZenPasabuy() {
                     {qtyNum > 1 && <TagRow name={`Whole batch profit (×${qtyNum})`} php={result.profitAtList * qtyNum} />}
                   </div>
                 </div>
+                {/* collapsible: show your work */}
+                <div style={{ ...card, padding: 0, overflow: "hidden" }}>
+                  <button onClick={() => setShowMath(!showMath)} style={{ width: "100%", padding: "13px 16px", border: "none", background: "transparent", color: T.ink, fontFamily: "'Quicksand', sans-serif", fontWeight: 700, fontSize: 13.5, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span>🧮 {showMath ? "Hide" : "Show"} the computation</span>
+                    <span style={{ color: T.muted, fontSize: 12 }}>{showMath ? "▲" : "▼"}</span>
+                  </button>
+                  {showMath && (() => {
+                    const Step = ({ n, title, formula, value, note }) => (
+                      <div style={{ padding: "10px 16px", borderTop: `1px solid ${T.border}` }}>
+                        <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                          <span style={{ width: 20, height: 20, borderRadius: 999, background: T.primary, color: "#fff", fontSize: 11, fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{n}</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 700, fontSize: 12.5 }}>{title}</div>
+                            <code style={{ display: "block", fontSize: 11.5, color: T.muted, marginTop: 3, wordBreak: "break-word", fontFamily: "ui-monospace, Menlo, monospace" }}>{formula}</code>
+                            {note && <div style={{ fontSize: 10.5, color: T.muted, marginTop: 3 }}>{note}</div>}
+                          </div>
+                          <b style={{ color: T.primary, fontSize: 13, whiteSpace: "nowrap" }}>{value}</b>
+                        </div>
+                      </div>
+                    );
+                    const r4 = Number(rate).toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+                    return (
+                      <div style={{ paddingBottom: 8 }}>
+                        {qtyNum > 1 && (
+                          <Step n="0" title="Wholesale → per piece"
+                            formula={`${yen(totalJpyNum)} ÷ ${qtyNum} pcs = ${yen(unitJpy)}`}
+                            value={yen(unitJpy)} />
+                        )}
+                        <Step n={qtyNum > 1 ? "1" : "1"} title="Convert to pesos"
+                          formula={`${yen(unitJpy)} × ₱${r4} = ${peso(result.landed)}`}
+                          value={peso(result.landed)}
+                          note={settings.rateMode === "live" && settings.liveRate ? "live market rate" : "your saved rate"} />
+                        <Step n="2" title={`Buffer (${settings.buffer}%)`}
+                          formula={`${peso(result.landed)} × ${settings.buffer}% = ${peso(result.bufferAmt)}`}
+                          value={peso(result.bufferAmt)}
+                          note="covers rate swings, packaging, small extras" />
+                        <Step n="3" title={`Logistics & effort — ${source.name}`}
+                          formula={`${yen(source.feeJpy)} × ₱${r4} = ${peso(result.fee)}`}
+                          value={peso(result.fee)}
+                          note="train fare + time, per piece" />
+                        <Step n="4" title="Your true cost per piece"
+                          formula={`${peso(result.landed)} + ${peso(result.bufferAmt)} + ${peso(result.fee)} = ${peso(result.trueCost)}`}
+                          value={peso(result.trueCost)}
+                          note="break-even — selling below this loses money" />
+                        <Step n="5" title={`Floor price — ${tier.name} tier (+${tier.margin}%)`}
+                          formula={`${peso(result.trueCost)} × ${(1 + tier.margin / 100).toFixed(2)} = ${peso(result.trueCost * (1 + tier.margin / 100))} → rounded up to ${peso(result.floor)}`}
+                          value={peso(result.floor)}
+                          note="rounded up to the nearest ₱5 — the lowest you should ever agree to" />
+                        <Step n="6" title={`Quote price (+${settings.negotiation}% haggle room)`}
+                          formula={`${peso(result.floor)} × ${(1 + settings.negotiation / 100).toFixed(2)} = ${peso(result.floor * (1 + settings.negotiation / 100))} → rounded up to ${peso(result.list)}`}
+                          value={peso(result.list)}
+                          note="rounded up to the nearest ₱10 — what you tell the customer" />
+                        <Step n="7" title="Profit check"
+                          formula={`${peso(result.list)} − ${peso(result.trueCost)} = ${peso(result.profitAtList)} (${pct((result.profitAtList / result.trueCost) * 100)} of cost)`}
+                          value={`+${peso(result.profitAtList)}`}
+                          note={`if haggled down to the floor: +${peso(result.profitAtFloor)}${qtyNum > 1 ? ` · whole batch: +${peso(result.profitAtList * qtyNum)}` : ""}`} />
+                        <div style={{ padding: "10px 16px", fontSize: 11, color: T.muted, borderTop: `1px solid ${T.border}` }}>
+                          Every percentage above is editable in <b>Set-up</b> — buffer, haggle room, tier margins, and sourcing fees.
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+
                 <button onClick={saveProduct} style={primaryBtn}>
                   {restockProduct ? `Add ${qtyNum} pc(s) to ${restockProduct.name}` : `Save product · ${qtyNum} pc(s) in stock`}
                 </button>
@@ -1059,11 +1162,8 @@ export default function ZenPasabuy() {
               <div style={{ ...card, border: `1.5px solid ${T.pink}` }}>
                 <span style={label}>New order — take it now, buy later</span>
                 <div style={{ display: "grid", gap: 8 }}>
-                  <input value={draft.customer} onChange={(e) => setDraft({ ...draft, customer: e.target.value })} placeholder="Customer name" style={inputStyle} />
+                  <input value={draft.customer} onChange={(e) => setDraft({ ...draft, customer: e.target.value })} placeholder="Customer name" list="zp-customers" style={inputStyle} />
                   <input value={draft.location} onChange={(e) => setDraft({ ...draft, location: e.target.value })} placeholder="Location (e.g., Quezon City)" list="zp-locations" style={inputStyle} />
-                  <datalist id="zp-locations">
-                    {allLocations.map((loc) => <option key={loc} value={loc} />)}
-                  </datalist>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                     <div>
                       <span style={{ ...label, fontSize: 9.5, marginBottom: 3 }}>Order date</span>
@@ -1103,7 +1203,7 @@ export default function ZenPasabuy() {
                   {lineProdId === "custom" && (
                     <>
                       <div style={{ display: "grid", gridTemplateColumns: "1.3fr 0.7fr", gap: 8, marginTop: 8 }}>
-                        <input value={lineName} onChange={(e) => setLineName(e.target.value)} placeholder="Item name" style={{ ...inputStyle, fontSize: 14 }} />
+                        <input value={lineName} onChange={(e) => setLineName(e.target.value)} placeholder="Item name" list="zp-products" style={{ ...inputStyle, fontSize: 14 }} />
                         <input type="number" inputMode="decimal" value={lineUnitJpy} onChange={(e) => setLineUnitJpy(e.target.value)} placeholder="¥ cost/pc" style={{ ...inputStyle, fontSize: 14 }} />
                       </div>
                       {(() => {
@@ -1355,18 +1455,25 @@ export default function ZenPasabuy() {
 
             <div style={card}>
               <span style={label}>Website colors</span>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-                {THEME_PRESETS.map((p) => (
-                  <button key={p.name} onClick={() => { setSettings({ ...settings, theme: { ...p.theme } }); ping(`Theme: ${p.name}`); }} style={{ ...ghostBtn, display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ display: "flex", gap: 2 }}>
-                      {[p.theme.primary, p.theme.accent, p.theme.pink].map((c) => (
-                        <span key={c} style={{ width: 12, height: 12, borderRadius: 999, background: c, display: "inline-block" }} />
-                      ))}
-                    </span>
-                    {p.name}
-                  </button>
-                ))}
-              </div>
+              {[false, true].map((isDark) => (
+                <div key={String(isDark)} style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, color: T.muted, letterSpacing: "0.1em", marginBottom: 6 }}>
+                    {isDark ? "DARK" : "LIGHT"}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {THEME_PRESETS.filter((p) => !!p.dark === isDark).map((p) => (
+                      <button key={p.name} onClick={() => { setSettings({ ...settings, theme: { ...p.theme } }); ping(`Theme: ${p.name}`); }} style={{ ...ghostBtn, display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ display: "flex", gap: 2 }}>
+                          {[p.theme.primary, p.theme.accent, p.theme.bg].map((c) => (
+                            <span key={c} style={{ width: 12, height: 12, borderRadius: 999, background: c, display: "inline-block", border: `1px solid ${T.border}` }} />
+                          ))}
+                        </span>
+                        {p.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
               {[
                 ["primary", "Primary — headers, buttons"],
                 ["accent", "Accent — highlights"],
@@ -1376,6 +1483,9 @@ export default function ZenPasabuy() {
                 ["border", "Card borders"],
                 ["ink", "Text"],
                 ["muted", "Muted text"],
+                ["paper", "Cards"],
+                ["soft", "Panels & table stripes"],
+                ["good", "Profit / success green"],
               ].map(([key, name]) => (
                 <div key={key} style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
                   <input type="color" value={T[key]} onChange={(e) => setSettings({ ...settings, theme: { ...T, [key]: e.target.value } })} style={{ width: 42, height: 34, border: `1.5px solid ${T.border}`, borderRadius: 10, background: T.paper, padding: 2, cursor: "pointer" }} />
@@ -1398,6 +1508,32 @@ export default function ZenPasabuy() {
               <div style={{ textAlign: "center", marginTop: 10, fontSize: 11.5, color: T.muted }}>
                 Version {APP_VERSION}
                 <br />App updated: {APP_UPDATED}
+              </div>
+            </div>
+
+            <div style={card}>
+              <span style={label}>Saved suggestions</span>
+              <div style={{ fontSize: 12.5, color: T.muted }}>
+                Zen Pasabuy remembers what you type so you can pick it next time instead of retyping.
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10, fontSize: 12.5 }}>
+                {[["Shops", memShops.length], ["Locations", memLocations.length], ["Customers", memCustomers.length], ["Products", memProducts.length]].map(([n, c]) => (
+                  <div key={n} style={{ background: T.soft, border: `1px solid ${T.border}`, borderRadius: 12, padding: "8px 12px" }}>
+                    <b style={{ color: T.primary }}>{c}</b> <span style={{ color: T.muted }}>{n.toLowerCase()}</span>
+                  </div>
+                ))}
+              </div>
+              <button
+                onClick={() => {
+                  if (!window.confirm("Clear remembered suggestions? Your products and orders stay — only the typed-history list is cleared.")) return;
+                  setSettings({ ...settings, memory: { shops: [], locations: [], customers: [], products: [] } });
+                  ping("Suggestion history cleared");
+                }}
+                style={{ ...ghostBtn, width: "100%", marginTop: 10, color: T.muted }}>
+                Clear suggestion history
+              </button>
+              <div style={{ fontSize: 11, color: T.muted, marginTop: 8 }}>
+                Names already used by saved products and orders will still appear.
               </div>
             </div>
 
