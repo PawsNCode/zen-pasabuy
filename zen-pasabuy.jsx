@@ -1,33 +1,4 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Zen Pasabuy — calm decisions, clear profits</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌸</text></svg>" />
-<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
-<style>html,body{margin:0;padding:0}#root{min-height:100vh}</style>
-</head>
-<body>
-<div id="root"></div>
-<script>
-/* Persistence shim: the app calls window.storage — on GitHub Pages we back it with localStorage */
-window.storage = {
-  async get(key) {
-    const v = localStorage.getItem(key);
-    if (v == null) throw new Error("not found");
-    return { key, value: v };
-  },
-  async set(key, value) {
-    try { localStorage.setItem(key, value); return { key, value }; }
-    catch (e) { return null; }
-  },
-};
-</script>
-<script type="text/babel" data-presets="react">
-const { useState, useEffect, useMemo, useRef } = React;
+import { useState, useEffect, useMemo, useRef } from "react";
 
 /* ─────────────────────────────  ZEN PASABUY v6  ────────────────────────────
    Japan→PH pasabuy pricing system.
@@ -101,12 +72,23 @@ function computePrice(unitJpy, tierMargin, feePhp, rate, settings) {
 }
 
 async function fetchLiveRate() {
-  // Free, no-key FX API that allows browser requests (CORS) — fine for GitHub Pages
-  const response = await fetch("https://open.er-api.com/v6/latest/JPY");
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6", max_tokens: 1000,
+      messages: [{ role: "user", content: 'Search for the current JPY to PHP exchange rate. Respond ONLY with a JSON object, no markdown, no other text: {"rate": <PHP per 1 JPY as a plain number, e.g. 0.39>}' }],
+      tools: [{ type: "web_search_20250305", name: "web_search" }],
+    }),
+  });
   const data = await response.json();
-  const r = parseFloat(data?.rates?.PHP);
+  const text = (data.content || []).filter((i) => i.type === "text").map((i) => i.text).join("\n");
+  const clean = text.replace(/```json|```/g, "").trim();
+  const m = clean.match(/\{[\s\S]*?\}/);
+  const parsed = JSON.parse(m ? m[0] : clean);
+  const r = parseFloat(parsed.rate);
   if (!(r > 0.05 && r < 5)) throw new Error("rate out of range");
-  return Math.round(r * 10000) / 10000;
+  return r;
 }
 
 const resizePhoto = (file) =>
@@ -165,7 +147,7 @@ function download(filename, text, type) {
 }
 
 /* ─────────────────────────────  APP  ───────────────────────────── */
-function ZenPasabuy() {
+export default function ZenPasabuy() {
   const [tab, setTab] = useState("price");
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [products, setProducts] = useState([]);
@@ -1323,8 +1305,3 @@ function ZenPasabuy() {
     </div>
   );
 }
-
-ReactDOM.createRoot(document.getElementById("root")).render(<ZenPasabuy />);
-</script>
-</body>
-</html>
