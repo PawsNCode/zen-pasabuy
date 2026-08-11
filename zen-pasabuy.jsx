@@ -56,8 +56,8 @@ const DEFAULT_SETTINGS = {
 const STORAGE_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "6.5.0";
-const APP_UPDATED = "Aug 11, 2026 · 7:02 PM PHT";
+const APP_VERSION = "6.6.0";
+const APP_UPDATED = "Aug 11, 2026 · 7:38 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -237,6 +237,12 @@ export default function ZenPasabuy() {
   const [lineName, setLineName] = useState("");
   const [lineUnitJpy, setLineUnitJpy] = useState("");
   const [openOrder, setOpenOrder] = useState(null);
+  const [editOrderId, setEditOrderId] = useState(null);
+  const [eProdId, setEProdId] = useState("custom");
+  const [eQty, setEQty] = useState("1");
+  const [eSell, setESell] = useState("");
+  const [eName, setEName] = useState("");
+  const [eJpy, setEJpy] = useState("");
   const [period, setPeriod] = useState("month");
   const [orderSearch, setOrderSearch] = useState("");
   const [phaseFilter, setPhaseFilter] = useState("all"); // all | sourcing | ready | dispatched | completed
@@ -334,16 +340,23 @@ export default function ZenPasabuy() {
   const saveProduct = () => {
     if (!result) return;
     const lot = { id: Date.now(), date: pDate || today(), store: pStore.trim(), qty: qtyNum, remaining: qtyNum, totalJpy: totalJpyNum, unitJpy, unitCost: result.trueCost };
+    let nextProducts;
+    let msg;
     if (restockProduct) {
-      setProducts(products.map((p) => (p.id === restockProduct.id ? { ...p, lots: [...p.lots, lot], list: result.list, floor: result.floor, tierName: tier.name, photo: pPhoto || p.photo } : p)));
+      nextProducts = products.map((p) => (p.id === restockProduct.id ? { ...p, lots: [...p.lots, lot], list: result.list, floor: result.floor, tierName: tier.name, photo: pPhoto || p.photo } : p));
       remember("shops", pStore);
-      ping(`Restocked ${restockProduct.name} · +${qtyNum} pc(s) 🗻`);
+      msg = `Restocked ${restockProduct.name} · +${qtyNum} pc(s) 🗻`;
     } else {
-      setProducts([{ id: Date.now() + 1, name: pName.trim() || "Untitled find", photo: pPhoto, tierName: tier.name, list: result.list, floor: result.floor, lots: [lot] }, ...products]);
+      nextProducts = [{ id: Date.now() + 1, name: pName.trim() || "Untitled find", photo: pPhoto, tierName: tier.name, list: result.list, floor: result.floor, lots: [lot] }, ...products];
       remember("shops", pStore);
       remember("products", pName);
-      ping("Product saved with stock 🗻");
+      msg = "Product saved with stock 🗻";
     }
+    /* any waiting order line for this product is now filled automatically */
+    const res = autoFulfil(nextProducts, orders);
+    setProducts(res.products);
+    if (res.filled) setOrders(res.orders);
+    ping(res.filled ? `${msg} — filled ${res.summary}` : msg);
     setPName(""); setPStore(""); setPTotalJpy(""); setPQty("1"); setPPhoto(null); setPDate(today()); setPTarget("new");
   };
 
@@ -398,6 +411,45 @@ export default function ZenPasabuy() {
     ping(lineProduct ? `Reserved ${line.qty} pc(s) from stock` : "Pre-order item added — mark it Bought once you have it");
   };
 
+  /* suggested selling prices for a product (or a freshly computed item) */
+  const priceSuggestions = (floor, best) => [
+    { key: "floor", label: "Floor", value: floor, note: "lowest safe" },
+    { key: "best", label: "Best", value: best, note: "recommended" },
+    { key: "premium", label: "Premium", value: roundUp10(best * 1.12), note: "rare / rush" },
+  ];
+
+  /* when stock arrives, fill any order line still waiting for that product */
+  const autoFulfil = (prodList, orderList) => {
+    const used = {}; // lotId -> qty taken in this pass
+    let filled = 0;
+    const names = {};
+    const newOrders = orderList.map((o) => {
+      if (o.status === "completed") return o;
+      let touched = false;
+      const lines = o.lines.map((l) => {
+        if (l.bought) return l;
+        const match = prodList.find((p) => p.name.trim().toLowerCase() === (l.name || "").trim().toLowerCase());
+        if (!match) return l;
+        const { allocs, short } = allocateFIFO(match, l.qty, used);
+        if (short > 0) return l; // not enough stock yet — leave it waiting
+        allocs.forEach((a) => { used[a.lotId] = (used[a.lotId] || 0) + a.qty; });
+        const cost = allocs.reduce((a, x) => a + x.unitCost * x.qty, 0) / l.qty;
+        const uj = allocs.reduce((a, x) => a + x.unitJpy * x.qty, 0) / l.qty;
+        touched = true; filled += 1;
+        names[l.name] = (names[l.name] || 0) + l.qty;
+        return { ...l, bought: true, productId: match.id, unitCost: cost, unitJpy: uj, allocs };
+      });
+      return touched ? { ...o, lines } : o;
+    });
+    if (!filled) return { products: prodList, orders: orderList, filled: 0, summary: "" };
+    const newProducts = prodList.map((p) => ({
+      ...p,
+      lots: p.lots.map((lot) => (used[lot.id] ? { ...lot, remaining: Math.max(0, lot.remaining - used[lot.id]) } : lot)),
+    }));
+    const summary = Object.entries(names).map(([n, q]) => `${q}× ${n}`).join(", ");
+    return { products: newProducts, orders: newOrders, filled, summary };
+  };
+
   const lineMath = (l) => {
     const spent = l.unitCost * l.qty;
     const revenue = l.sell * l.qty;
@@ -439,6 +491,45 @@ export default function ZenPasabuy() {
   };
 
   /* lifecycle actions */
+  /* ── editing a saved order ── */
+  const removeLineFromOrder = (orderId, lineId) => {
+    const o = orders.find((x) => x.id === orderId);
+    const l = o?.lines.find((x) => x.id === lineId);
+    if (!o || !l) return;
+    if (o.lines.length === 1) return ping("An order needs at least one item — delete the whole order instead");
+    if (!window.confirm(`Remove ${l.name} × ${l.qty} from ${o.customer}'s order?${Array.isArray(l.allocs) ? " Its stock goes back to inventory." : ""}`)) return;
+    if (Array.isArray(l.allocs)) setProducts((prods) => applyAllocs(prods, [l], +1));
+    setOrders(orders.map((x) => (x.id === orderId ? { ...x, lines: x.lines.filter((y) => y.id !== lineId) } : x)));
+    ping("Item removed");
+  };
+
+  const addLineToOrder = (orderId) => {
+    const o = orders.find((x) => x.id === orderId);
+    if (!o) return;
+    const q = Math.max(1, parseInt(eQty) || 1);
+    const sell = parseFloat(eSell) || 0;
+    const prod = products.find((p) => p.id === Number(eProdId));
+    let line;
+    if (prod) {
+      const { allocs, short } = allocateFIFO(prod, q, {});
+      if (short > 0) return ping(`Only ${q - short} pc(s) of ${prod.name} in stock`);
+      const cost = allocs.reduce((a, x) => a + x.unitCost * x.qty, 0) / q;
+      const uj = allocs.reduce((a, x) => a + x.unitJpy * x.qty, 0) / q;
+      line = { id: Date.now(), productId: prod.id, name: prod.name, qty: q, unitJpy: uj, unitCost: cost, sell: sell || prod.list, allocs, bought: true };
+      setProducts((prods) => applyAllocs(prods, [line], -1));
+    } else {
+      const uj = parseFloat(eJpy) || 0;
+      if (!eName.trim() || uj <= 0) return ping("Custom item needs a name and a ¥ cost");
+      const r = computePrice(uj, tier.margin, feePhp(source), rate, settings);
+      line = { id: Date.now(), productId: null, name: eName.trim(), qty: q, unitJpy: uj, unitCost: r.trueCost, sell: sell || r.list, allocs: null, bought: false };
+    }
+    if (line.sell <= 0) return ping("Set a selling price first");
+    remember("products", line.name);
+    setOrders(orders.map((x) => (x.id === orderId ? { ...x, lines: [...x.lines, line] } : x)));
+    setEQty("1"); setESell(""); setEName(""); setEJpy(""); setEProdId("custom");
+    ping("Item added to the order");
+  };
+
   const toggleLineBought = (orderId, lineId) =>
     setOrders(orders.map((o) => (o.id === orderId ? { ...o, lines: o.lines.map((l) => (l.id === lineId ? { ...l, bought: !l.bought } : l)) } : o)));
   const dispatchOrder = (id) => {
@@ -492,6 +583,22 @@ export default function ZenPasabuy() {
   };
   const periodStats = useMemo(() => sumOrders(periodOrders), [orders, period]); // eslint-disable-line
   const allStats = useMemo(() => sumOrders(orders), [orders]); // eslint-disable-line
+
+  /* items across all open orders that still need to be bought */
+  const pendingItems = useMemo(() => {
+    const map = {};
+    orders.forEach((o) => {
+      if (o.status === "completed") return;
+      o.lines.forEach((l) => {
+        if (l.bought) return;
+        const k = l.name.trim();
+        if (!map[k]) map[k] = { qty: 0, customers: new Set() };
+        map[k].qty += l.qty;
+        map[k].customers.add(o.customer);
+      });
+    });
+    return Object.entries(map).map(([name, v]) => ({ name, qty: v.qty, customers: [...v.customers] })).sort((a, b) => b.qty - a.qty);
+  }, [orders]);
 
   const phaseCounts = useMemo(() => {
     const c = { all: periodOrders.length, sourcing: 0, ready: 0, dispatched: 0, completed: 0 };
@@ -1157,6 +1264,21 @@ export default function ZenPasabuy() {
               ))}
             </div>
 
+            {pendingItems.length > 0 && (
+              <div style={{ ...card, borderLeft: `5px solid ${PHASE.sourcing.color}` }}>
+                <span style={{ ...label, color: PHASE.sourcing.color }}>Still to buy — {pendingItems.reduce((a, x) => a + x.qty, 0)} pc(s)</span>
+                {pendingItems.map((x) => (
+                  <div key={x.name} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "5px 0", fontSize: 12.5, borderBottom: `1px solid ${T.border}` }}>
+                    <span><b>{x.qty}×</b> {x.name}</span>
+                    <span style={{ color: T.muted, fontSize: 11.5, textAlign: "right" }}>for {x.customers.join(", ")}</span>
+                  </div>
+                ))}
+                <div style={{ fontSize: 11, color: T.muted, marginTop: 8 }}>
+                  Log these in <b>Price it</b> with the same product name and the matching orders fill themselves — stock is deducted and the items flip to ✓ Bought automatically.
+                </div>
+              </div>
+            )}
+
             {/* new order builder */}
             {showDraft && (
               <div style={{ ...card, border: `1.5px solid ${T.pink}` }}>
@@ -1184,7 +1306,7 @@ export default function ZenPasabuy() {
                       const avail = draftAvail(p);
                       return (
                         <option key={p.id} value={p.id} disabled={avail <= 0}>
-                          📦 {p.name} — {avail <= 0 ? "sold out" : `${avail} in stock`}
+                          📦 {p.name} — {avail <= 0 ? "sold out" : `${avail} in stock`} · {peso(p.floor)}–{peso(p.list)}
                         </option>
                       );
                     })}
@@ -1234,6 +1356,32 @@ export default function ZenPasabuy() {
                     </div>
                     <button onClick={addLine} style={{ ...primaryBtn, padding: 11, fontSize: 13.5 }}>Add item</button>
                   </div>
+                  {(() => {
+                    let sug = null;
+                    if (lineProduct) sug = priceSuggestions(lineProduct.floor, lineProduct.list);
+                    else {
+                      const uj = parseFloat(lineUnitJpy) || 0;
+                      if (uj > 0) { const r = computePrice(uj, tier.margin, feePhp(source), rate, settings); sug = priceSuggestions(r.floor, r.list); }
+                    }
+                    if (!sug) return null;
+                    return (
+                      <div style={{ marginTop: 8 }}>
+                        <span style={{ ...label, fontSize: 9.5, marginBottom: 4 }}>Suggested price</span>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          {sug.map((x) => {
+                            const on = Math.round(parseFloat(lineSell) || 0) === Math.round(x.value);
+                            return (
+                              <button key={x.key} onClick={() => setLineSell(String(x.value))}
+                                style={{ padding: "6px 11px", borderRadius: 999, border: `1.5px solid ${on ? T.primary : T.border}`, background: on ? T.primary : T.paper, color: on ? "#fff" : T.ink, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Quicksand', sans-serif" }}>
+                                {x.label} {peso(x.value)}
+                                <span style={{ opacity: .75, fontWeight: 500 }}> · {x.note}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
                   {lineSell && parseFloat(lineSell) > 0 && (
                     <div style={{ fontSize: 11, color: T.muted, marginTop: 6 }}>
                       Sell each ≈ {yen(toYen(parseFloat(lineSell)))} · {peso(parseFloat(lineSell))}
@@ -1323,8 +1471,17 @@ export default function ZenPasabuy() {
                         return (
                           <div key={l.id} style={{ padding: "7px 0", borderBottom: `1px solid ${T.border}`, fontSize: 12.5 }}>
                             <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
-                              <b>{l.name} × {l.qty}</b>
-                              {phase !== "completed" ? (
+                              <b>
+                                {l.name} × {l.qty}
+                                {!l.bought && (
+                                  <span style={{ marginLeft: 6, fontSize: 9.5, fontWeight: 700, color: PHASE.sourcing.color, border: `1px solid ${PHASE.sourcing.color}`, borderRadius: 999, padding: "1px 6px" }}>
+                                    NEEDS STOCK
+                                  </span>
+                                )}
+                              </b>
+                              {editOrderId === o.id && phase !== "completed" ? (
+                                <button onClick={() => removeLineFromOrder(o.id, l.id)} style={{ border: "none", background: "transparent", color: T.pink, fontSize: 15, cursor: "pointer" }}>✕</button>
+                              ) : phase !== "completed" ? (
                                 <button onClick={() => toggleLineBought(o.id, l.id)} style={{ padding: "4px 10px", borderRadius: 999, border: "none", background: l.bought ? PHASE.ready.color : PHASE.sourcing.color, color: "#fff", fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Quicksand', sans-serif" }}>
                                   {l.bought ? "✓ Bought" : "Mark bought"}
                                 </button>
@@ -1343,6 +1500,71 @@ export default function ZenPasabuy() {
                           </div>
                         );
                       })}
+                      {editOrderId === o.id && phase !== "completed" && (
+                        <div style={{ marginTop: 10, padding: 12, borderRadius: 14, background: T.soft, border: `1px solid ${T.border}` }}>
+                          <span style={{ ...label, fontSize: 9.5 }}>Add another item</span>
+                          <select value={eProdId} onChange={(e) => {
+                            setEProdId(e.target.value);
+                            const p = products.find((x) => x.id === Number(e.target.value));
+                            setESell(p ? String(p.list) : "");
+                          }} style={{ ...inputStyle, fontSize: 14 }}>
+                            <option value="custom">✏️ To buy — not in inventory yet</option>
+                            {products.map((p) => {
+                              const av = productStock(p);
+                              return (
+                                <option key={p.id} value={p.id} disabled={av <= 0}>
+                                  📦 {p.name} — {av <= 0 ? "sold out" : `${av} in stock`} · {peso(p.floor)}–{peso(p.list)}
+                                </option>
+                              );
+                            })}
+                          </select>
+                          {eProdId === "custom" && (
+                            <div style={{ display: "grid", gridTemplateColumns: "1.3fr 0.7fr", gap: 8, marginTop: 8 }}>
+                              <input value={eName} onChange={(e) => setEName(e.target.value)} placeholder="Item name" list="zp-products" style={{ ...inputStyle, fontSize: 14 }} />
+                              <input type="number" inputMode="decimal" value={eJpy} onChange={(e) => setEJpy(e.target.value)} placeholder="¥ cost/pc" style={{ ...inputStyle, fontSize: 14 }} />
+                            </div>
+                          )}
+                          <div style={{ display: "grid", gridTemplateColumns: "0.6fr 1fr 0.9fr", gap: 8, marginTop: 8, alignItems: "end" }}>
+                            <div>
+                              <span style={{ ...label, fontSize: 9.5, marginBottom: 3 }}>Qty</span>
+                              <input type="number" inputMode="numeric" min="1" value={eQty} onChange={(e) => setEQty(e.target.value)} style={{ ...inputStyle, textAlign: "center", fontSize: 14 }} />
+                            </div>
+                            <div>
+                              <span style={{ ...label, fontSize: 9.5, marginBottom: 3 }}>Sell each (₱)</span>
+                              <input type="number" inputMode="decimal" value={eSell} onChange={(e) => setESell(e.target.value)} placeholder="₱" style={{ ...inputStyle, fontSize: 14 }} />
+                            </div>
+                            <button onClick={() => addLineToOrder(o.id)} style={{ ...primaryBtn, padding: 11, fontSize: 13.5 }}>Add</button>
+                          </div>
+                          {(() => {
+                            const p = products.find((x) => x.id === Number(eProdId));
+                            let sug = null;
+                            if (p) sug = priceSuggestions(p.floor, p.list);
+                            else {
+                              const uj = parseFloat(eJpy) || 0;
+                              if (uj > 0) { const r = computePrice(uj, tier.margin, feePhp(source), rate, settings); sug = priceSuggestions(r.floor, r.list); }
+                            }
+                            if (!sug) return null;
+                            return (
+                              <div style={{ marginTop: 8 }}>
+                                <span style={{ ...label, fontSize: 9.5, marginBottom: 4 }}>Suggested price</span>
+                                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                                  {sug.map((x) => {
+                                    const on = Math.round(parseFloat(eSell) || 0) === Math.round(x.value);
+                                    return (
+                                      <button key={x.key} onClick={() => setESell(String(x.value))}
+                                        style={{ padding: "6px 11px", borderRadius: 999, border: `1.5px solid ${on ? T.primary : T.border}`, background: on ? T.primary : T.paper, color: on ? "#fff" : T.ink, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Quicksand', sans-serif" }}>
+                                        {x.label} {peso(x.value)}
+                                        <span style={{ opacity: .75, fontWeight: 500 }}> · {x.note}</span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      )}
+
                       <div style={{ marginTop: 8, fontSize: 12.5 }}>
                         <span style={{ color: T.muted }}>Total spent {peso(m.spent)} · charge </span>
                         <b style={{ color: T.primary }}>{peso(m.revenue)}</b>
@@ -1366,6 +1588,12 @@ export default function ZenPasabuy() {
                         )}
                         {phase === "completed" && (
                           <button onClick={() => reopenOrder(o.id)} style={{ ...ghostBtn, flex: 1 }}>Reopen order</button>
+                        )}
+                        {phase !== "completed" && (
+                          <button onClick={() => { setEditOrderId(editOrderId === o.id ? null : o.id); setEProdId("custom"); setESell(""); setEName(""); setEJpy(""); setEQty("1"); }}
+                            style={{ ...ghostBtn, color: editOrderId === o.id ? T.primary : T.accent, borderColor: editOrderId === o.id ? T.primary : T.border }}>
+                            {editOrderId === o.id ? "Done editing" : "✎ Edit items"}
+                          </button>
                         )}
                         <button onClick={() => removeOrder(o.id)} style={{ ...ghostBtn, color: T.pink }}>Delete</button>
                       </div>
