@@ -56,8 +56,8 @@ const DEFAULT_SETTINGS = {
 const STORAGE_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "6.4.0";
-const APP_UPDATED = "Aug 11, 2026 · 6:55 PM PHT";
+const APP_VERSION = "6.5.0";
+const APP_UPDATED = "Aug 11, 2026 · 7:02 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
