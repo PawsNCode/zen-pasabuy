@@ -2,13 +2,20 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>Zen Pasabuy — calm decisions, clear profits</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌸</text></svg>" />
+<meta name="description" content="Pricing calculator, inventory tracker and customer order book for a Japan to Philippines pasabuy business." />
+<meta name="theme-color" content="#801d5c" />
+<link rel="icon" type="image/svg+xml" href="logo.svg" />
+<link rel="alternate icon" type="image/png" href="icon-192.png" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<meta name="apple-mobile-web-app-title" content="Zen Pasabuy" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<link rel="manifest" href="manifest.json" />
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
-<style>html,body{margin:0;padding:0}#root{min-height:100vh}</style>
+<style>html,body{margin:0;padding:0;background:#fff4fb}#root{min-height:100vh}</style>
 </head>
 <body>
 <div id="root"></div>
@@ -76,8 +83,8 @@ const DEFAULT_SETTINGS = {
 const STORAGE_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "6.1.0";
-const APP_UPDATED = "Aug 11, 2026 · 6:40 PM PHT";
+const APP_VERSION = "6.3.0";
+const APP_UPDATED = "Aug 11, 2026 · 6:51 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -164,6 +171,52 @@ function download(filename, text, type) {
   URL.revokeObjectURL(url);
 }
 
+
+/* ── app logo: shopping bag holding Mt Fuji + a cherry blossom ── */
+function ZenLogo({ size = 44 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 64 64" role="img" aria-label="Zen Pasabuy" style={{ display: "block", flexShrink: 0 }}>
+      <defs>
+        <linearGradient id="zpBag" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#a02670" />
+          <stop offset="100%" stopColor="#801d5c" />
+        </linearGradient>
+        <linearGradient id="zpSky" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#fff4fb" />
+          <stop offset="100%" stopColor="#fbe0ef" />
+        </linearGradient>
+        <linearGradient id="zpFuji" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#c02e80" />
+          <stop offset="100%" stopColor="#801d5c" />
+        </linearGradient>
+        <clipPath id="zpInner">
+          <path d="M14.5 22h35l-2.6 32.2a4.4 4.4 0 0 1-4.4 4.05H21.5a4.4 4.4 0 0 1-4.4-4.05Z" />
+        </clipPath>
+      </defs>
+      <path d="M23 24v-6.5a9 9 0 0 1 18 0V24" fill="none" stroke="url(#zpBag)" strokeWidth="4.4" strokeLinecap="round" />
+      <path d="M11.6 18.5h40.8a2.6 2.6 0 0 1 2.6 2.8l-2.7 33.4A7 7 0 0 1 45.3 61H18.7a7 7 0 0 1-7-6.3L9 21.3a2.6 2.6 0 0 1 2.6-2.8Z" fill="url(#zpBag)" />
+      <path d="M14.5 22h35l-2.6 32.2a4.4 4.4 0 0 1-4.4 4.05H21.5a4.4 4.4 0 0 1-4.4-4.05Z" fill="url(#zpSky)" />
+      <g clipPath="url(#zpInner)">
+        <path d="M32 30.5 47.5 59H16.5Z" fill="url(#zpFuji)" />
+        <path d="M32 30.5l5.6 10.3-2.4-1.6-2 2.2-2.4-2.6-2.3 2.3-2.2-1.6-2 1.5Z" fill="#fff8fc" />
+        <path d="M6 59c5-6.5 10-9 14-6.2 3.6 2.5 5 4.4 6 6.2Z" fill="#cd81a9" opacity=".75" />
+        <path d="M58 59c-4.6-7.2-9.4-9.8-13.6-6.6-3.4 2.6-4.8 4.6-5.6 6.6Z" fill="#cd81a9" opacity=".55" />
+      </g>
+      <g transform="translate(42.2 29.4)">
+        <g fill="#ffd7ea">
+          <ellipse cx="0" cy="-5.4" rx="3.05" ry="4.5" />
+          <ellipse cx="0" cy="-5.4" rx="3.05" ry="4.5" transform="rotate(72)" />
+          <ellipse cx="0" cy="-5.4" rx="3.05" ry="4.5" transform="rotate(144)" />
+          <ellipse cx="0" cy="-5.4" rx="3.05" ry="4.5" transform="rotate(216)" />
+          <ellipse cx="0" cy="-5.4" rx="3.05" ry="4.5" transform="rotate(288)" />
+        </g>
+        <circle cx="0" cy="0" r="1.9" fill="#c02e80" />
+      </g>
+      <ellipse cx="20.5" cy="31" rx="1.7" ry="2.5" transform="rotate(-25 20.5 31)" fill="#ffd7ea" />
+    </svg>
+  );
+}
+
 /* ─────────────────────────────  APP  ───────────────────────────── */
 function ZenPasabuy() {
   const [tab, setTab] = useState("price");
@@ -190,7 +243,7 @@ function ZenPasabuy() {
   const [sourceId, setSourceId] = useState("nearby");
 
   /* Orders state */
-  const emptyDraft = () => ({ customer: "", orderDate: today(), eta: "", lines: [] });
+  const emptyDraft = () => ({ customer: "", location: "", orderDate: today(), eta: "", lines: [] });
   const [draft, setDraft] = useState(emptyDraft());
   const [showDraft, setShowDraft] = useState(false);
   const [lineProdId, setLineProdId] = useState("custom");
@@ -202,10 +255,12 @@ function ZenPasabuy() {
   const [period, setPeriod] = useState("month");
   const [orderSearch, setOrderSearch] = useState("");
   const [phaseFilter, setPhaseFilter] = useState("all"); // all | sourcing | ready | dispatched | completed
+  const [locFilter, setLocFilter] = useState("all");
 
   /* Inventory */
   const [pageId, setPageId] = useState(null);
   const [invSearch, setInvSearch] = useState("");
+  const [shopFilter, setShopFilter] = useState("all");
 
   const T = { ...SWEETIES_THEME, ...(settings.theme || {}) };
   const ping = (msg) => { setToast(msg); setTimeout(() => setToast(""), 2600); };
@@ -419,12 +474,21 @@ function ZenPasabuy() {
   const matchesSearch = (o) => {
     const q = orderSearch.trim().toLowerCase();
     if (!q) return true;
-    return o.customer.toLowerCase().includes(q) || o.lines.some((l) => l.name.toLowerCase().includes(q));
+    return (
+      o.customer.toLowerCase().includes(q) ||
+      (o.location || "").toLowerCase().includes(q) ||
+      o.lines.some((l) => l.name.toLowerCase().includes(q))
+    );
   };
   const matchesPhase = (o) => phaseFilter === "all" || orderPhase(o) === phaseFilter;
+  const matchesLoc = (o) => locFilter === "all" || (o.location || "— no location —") === locFilter;
 
   const periodOrders = orders.filter(inPeriod);
-  const visibleOrders = periodOrders.filter((o) => matchesSearch(o) && matchesPhase(o));
+  const visibleOrders = periodOrders.filter((o) => matchesSearch(o) && matchesPhase(o) && matchesLoc(o));
+
+  /* every customer location on record, for the dropdown */
+  const allLocations = [...new Set(orders.map((o) => (o.location || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const hasUnlocated = orders.some((o) => !(o.location || "").trim());
 
   const sumOrders = (list) => {
     const all = list.map(orderMath);
@@ -463,10 +527,19 @@ function ZenPasabuy() {
     return { stockValue, potential, profit: potential - stockValue, pieces, sold, count: products.length };
   }, [products]);
 
+  /* every shop on record, for the inventory filter */
+  const allShops = [...new Set(products.flatMap((p) => (p.lots || []).map((l) => (l.store || "").trim())).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const hasUnshopped = products.some((p) => (p.lots || []).some((l) => !(l.store || "").trim()));
+
   const visibleProducts = products.filter((p) => {
     const q = invSearch.trim().toLowerCase();
-    if (!q) return true;
-    return p.name.toLowerCase().includes(q) || (p.lots || []).some((l) => (l.store || "").toLowerCase().includes(q));
+    const searchOk = !q || p.name.toLowerCase().includes(q) || (p.lots || []).some((l) => (l.store || "").toLowerCase().includes(q));
+    const shopOk =
+      shopFilter === "all" ||
+      (shopFilter === "— no shop —"
+        ? (p.lots || []).some((l) => !(l.store || "").trim())
+        : (p.lots || []).some((l) => (l.store || "").trim() === shopFilter));
+    return searchOk && shopOk;
   });
 
   /* product page data */
@@ -495,14 +568,14 @@ function ZenPasabuy() {
     ping("Inventory exported (photos live in the JSON backup)");
   };
   const exportOrdersCSV = () => {
-    const head = ["Order date", "Customer", "Status", "ETA", "Product", "Qty", "Bought", "Unit cost ₱", "Sell each ₱", "Spent ₱", "Revenue ₱", "Profit ₱", "Profit %"];
+    const head = ["Order date", "Customer", "Location", "Status", "ETA", "Product", "Qty", "Bought", "Unit cost ₱", "Sell each ₱", "Spent ₱", "Revenue ₱", "Profit ₱", "Profit %"];
     const rows = [];
     orders.forEach((o) => o.lines.forEach((l) => {
       const m = lineMath(l);
-      rows.push([o.orderDate, o.customer, PHASE[orderPhase(o)].label, o.eta || "", l.name, l.qty, l.bought ? "Yes" : "No", Math.round(l.unitCost), Math.round(l.sell), Math.round(m.spent), Math.round(m.revenue), Math.round(m.profit), Math.round(m.margin) + "%"]);
+      rows.push([o.orderDate, o.customer, o.location || "", PHASE[orderPhase(o)].label, o.eta || "", l.name, l.qty, l.bought ? "Yes" : "No", Math.round(l.unitCost), Math.round(l.sell), Math.round(m.spent), Math.round(m.revenue), Math.round(m.profit), Math.round(m.margin) + "%"]);
     }));
     rows.push([]);
-    rows.push(["TOTALS", "", "", "", "", "", "", "", "", Math.round(allStats.spent), Math.round(allStats.revenue), Math.round(allStats.profit), Math.round(allStats.margin) + "%"]);
+    rows.push(["TOTALS", "", "", "", "", "", "", "", "", "", Math.round(allStats.spent), Math.round(allStats.revenue), Math.round(allStats.profit), Math.round(allStats.margin) + "%"]);
     download(`zen-pasabuy-orders-${today()}.csv`, [head, ...rows].map((r) => r.map(csvCell).join(",")).join("\n"), "text/csv");
     ping("Orders exported");
   };
@@ -590,7 +663,7 @@ function ZenPasabuy() {
   );
   const Thumb = ({ p, size = 54 }) => (
     <div style={{ width: size, height: size, borderRadius: 12, background: T.soft, border: `1px solid ${T.border}`, overflow: "hidden", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: size / 2.6 }}>
-      {p.photo ? <img src={p.photo} alt={p.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : "🛍️"}
+      {p.photo ? <img src={p.photo} alt={p.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <ZenLogo size={size * 0.62} />}
     </div>
   );
   const TagRow = ({ name, php, strong }) => (
@@ -622,9 +695,14 @@ function ZenPasabuy() {
       `}</style>
 
       <div style={{ maxWidth: 560, margin: "0 auto", padding: "22px 16px 60px" }}>
-        <header style={{ textAlign: "center", marginBottom: 14 }}>
-          <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 36, fontWeight: 600, color: T.primary, lineHeight: 1.1 }}>Zen Pasabuy</div>
-          <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4, letterSpacing: "0.06em" }}>calm decisions, clear profits 🌸</div>
+        <header style={{ marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+            <ZenLogo size={46} />
+            <div style={{ textAlign: "left" }}>
+              <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 36, fontWeight: 600, color: T.primary, lineHeight: 1.05 }}>Zen Pasabuy</div>
+              <div style={{ fontSize: 12, color: T.muted, letterSpacing: "0.06em" }}>calm decisions, clear profits</div>
+            </div>
+          </div>
         </header>
 
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
@@ -774,7 +852,7 @@ function ZenPasabuy() {
 
               <div style={{ ...card, padding: 0, overflow: "hidden" }}>
                 <div style={{ height: 200, background: T.soft, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 56, position: "relative" }}>
-                  {pageProduct.photo ? <img src={pageProduct.photo} alt={pageProduct.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : "🛍️"}
+                  {pageProduct.photo ? <img src={pageProduct.photo} alt={pageProduct.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <ZenLogo size={92} />}
                   <button onClick={() => pagePhotoRef.current?.click()} style={{ ...ghostBtn, position: "absolute", bottom: 10, right: 10, fontSize: 11.5, background: "rgba(255,255,255,0.92)" }}>
                     📷 {pageProduct.photo ? "Change" : "Add photo"}
                   </button>
@@ -862,6 +940,20 @@ function ZenPasabuy() {
             {/* search */}
             <input value={invSearch} onChange={(e) => setInvSearch(e.target.value)} placeholder="🔍 Search products or shops…" style={inputStyle} />
 
+            {(allShops.length > 0 || hasUnshopped) && (
+              <div>
+                <span style={{ ...label, fontSize: 9.5 }}>Filter by shop</span>
+                <select value={shopFilter} onChange={(e) => setShopFilter(e.target.value)} style={{ ...inputStyle, fontSize: 14 }}>
+                  <option value="all">🏬 All shops ({products.length})</option>
+                  {allShops.map((sh) => {
+                    const n = products.filter((p) => (p.lots || []).some((l) => (l.store || "").trim() === sh)).length;
+                    return <option key={sh} value={sh}>{sh} ({n})</option>;
+                  })}
+                  {hasUnshopped && <option value="— no shop —">— no shop recorded —</option>}
+                </select>
+              </div>
+            )}
+
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <button onClick={exportProductsCSV} style={{ ...ghostBtn, color: T.accent }} disabled={!products.length}>⬇ CSV</button>
               <button onClick={exportJSON} style={{ ...ghostBtn, color: T.accent }}>⬇ Backup (with photos)</button>
@@ -876,7 +968,7 @@ function ZenPasabuy() {
             )}
             {products.length > 0 && visibleProducts.length === 0 && (
               <div style={{ ...card, textAlign: "center", color: T.muted, fontSize: 13.5 }}>
-                No products match "{invSearch}".
+                No products match {invSearch ? `"${invSearch}"` : "this filter"}{shopFilter !== "all" ? ` in ${shopFilter}` : ""}.
               </div>
             )}
 
@@ -958,7 +1050,21 @@ function ZenPasabuy() {
             </div>
 
             {/* search + phase filter */}
-            <input value={orderSearch} onChange={(e) => setOrderSearch(e.target.value)} placeholder="🔍 Search customer or product…" style={inputStyle} />
+            <input value={orderSearch} onChange={(e) => setOrderSearch(e.target.value)} placeholder="🔍 Search customer, location or product…" style={inputStyle} />
+
+            {(allLocations.length > 0 || hasUnlocated) && (
+              <div>
+                <span style={{ ...label, fontSize: 9.5 }}>Filter by customer location</span>
+                <select value={locFilter} onChange={(e) => setLocFilter(e.target.value)} style={{ ...inputStyle, fontSize: 14 }}>
+                  <option value="all">📍 All locations ({periodOrders.length})</option>
+                  {allLocations.map((loc) => {
+                    const n = periodOrders.filter((o) => (o.location || "").trim() === loc).length;
+                    return <option key={loc} value={loc}>{loc} ({n})</option>;
+                  })}
+                  {hasUnlocated && <option value="— no location —">— no location set —</option>}
+                </select>
+              </div>
+            )}
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               {[
                 ["all", "All", T.primary],
@@ -979,6 +1085,10 @@ function ZenPasabuy() {
                 <span style={label}>New order — take it now, buy later</span>
                 <div style={{ display: "grid", gap: 8 }}>
                   <input value={draft.customer} onChange={(e) => setDraft({ ...draft, customer: e.target.value })} placeholder="Customer name" style={inputStyle} />
+                  <input value={draft.location} onChange={(e) => setDraft({ ...draft, location: e.target.value })} placeholder="Location (e.g., Quezon City)" list="zp-locations" style={inputStyle} />
+                  <datalist id="zp-locations">
+                    {allLocations.map((loc) => <option key={loc} value={loc} />)}
+                  </datalist>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                     <div>
                       <span style={{ ...label, fontSize: 9.5, marginBottom: 3 }}>Order date</span>
@@ -1004,20 +1114,38 @@ function ZenPasabuy() {
                       );
                     })}
                   </select>
-                  {lineProduct && (
-                    <div style={{ fontSize: 11, color: T.muted, marginTop: 6 }}>
-                      {draftAvail(lineProduct)} pc(s) on hand · oldest batch sells first · already counts as bought
-                    </div>
-                  )}
+                  {lineProduct && (() => {
+                    const q = Math.max(1, parseInt(lineQty) || 1);
+                    const { allocs, short } = allocateFIFO(lineProduct, q, draftUsedFor(lineProduct.id));
+                    const cpp = allocs.length ? allocs.reduce((a, x) => a + x.unitCost * x.qty, 0) / allocs.reduce((a, x) => a + x.qty, 0) : productAvgCost(lineProduct);
+                    return (
+                      <div style={{ fontSize: 11.5, color: T.muted, marginTop: 6 }}>
+                        <b style={{ color: T.primary }}>Cost/pc {yen(toYen(cpp))} · {peso(cpp)}</b>
+                        {" "}— {short > 0 ? `only ${q - short} pc(s) on hand` : `${draftAvail(lineProduct)} pc(s) on hand`} · oldest batch first · counts as bought
+                      </div>
+                    );
+                  })()}
                   {lineProdId === "custom" && (
                     <>
                       <div style={{ display: "grid", gridTemplateColumns: "1.3fr 0.7fr", gap: 8, marginTop: 8 }}>
                         <input value={lineName} onChange={(e) => setLineName(e.target.value)} placeholder="Item name" style={{ ...inputStyle, fontSize: 14 }} />
                         <input type="number" inputMode="decimal" value={lineUnitJpy} onChange={(e) => setLineUnitJpy(e.target.value)} placeholder="¥ cost/pc" style={{ ...inputStyle, fontSize: 14 }} />
                       </div>
-                      <div style={{ fontSize: 11, color: T.muted, marginTop: 6 }}>
-                        Estimated ¥ cost is fine — mark it Bought later once you actually have it.
-                      </div>
+                      {(() => {
+                        const uj = parseFloat(lineUnitJpy) || 0;
+                        if (uj <= 0) return (
+                          <div style={{ fontSize: 11, color: T.muted, marginTop: 6 }}>
+                            Estimated ¥ cost is fine — mark it Bought later once you actually have it.
+                          </div>
+                        );
+                        const r = computePrice(uj, tier.margin, feePhp(source), rate, settings);
+                        return (
+                          <div style={{ fontSize: 11.5, color: T.muted, marginTop: 6 }}>
+                            <b style={{ color: T.primary }}>Cost/pc {yen(toYen(r.trueCost))} · {peso(r.trueCost)}</b>
+                            {" "}(incl. buffer {settings.buffer}% + {source.name} {yen(source.feeJpy)}) · suggested sell {peso(r.list)}
+                          </div>
+                        );
+                      })()}
                     </>
                   )}
                   <div style={{ display: "grid", gridTemplateColumns: "0.6fr 1fr 0.9fr", gap: 8, marginTop: 8, alignItems: "end" }}>
@@ -1101,6 +1229,7 @@ function ZenPasabuy() {
                         <span style={{ fontSize: 10.5, fontWeight: 700, color: "#fff", background: ph.color, marginLeft: 8, padding: "2px 8px", borderRadius: 999 }}>{ph.label}</span>
                       </div>
                       <div style={{ fontSize: 11.5, color: T.muted, marginTop: 3 }}>
+                        {o.location ? `📍 ${o.location} · ` : ""}
                         {phase === "sourcing" ? `${boughtCount}/${o.lines.length} items bought · ` : ""}
                         {m.units} pc(s) · ordered {o.orderDate}{o.eta ? ` · arriving ${o.eta}` : ""}
                       </div>
