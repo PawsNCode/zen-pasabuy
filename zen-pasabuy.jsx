@@ -53,11 +53,13 @@ const DEFAULT_SETTINGS = {
   memory: { shops: [], locations: [], customers: [], products: [] },
 };
 
+const DANGER = "#d64545"; /* losses always show in red, in every theme */
+
 const STORAGE_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "6.6.0";
-const APP_UPDATED = "Aug 11, 2026 · 7:38 PM PHT";
+const APP_VERSION = "6.8.0";
+const APP_UPDATED = "Aug 11, 2026 · 7:50 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -65,6 +67,8 @@ const roundUp10 = (n) => Math.ceil(n / 10) * 10;
 const peso = (n) => "₱" + Number(n || 0).toLocaleString("en-PH", { maximumFractionDigits: 0 });
 const yen = (n) => "¥" + Number(n || 0).toLocaleString("ja-JP", { maximumFractionDigits: 0 });
 const pct = (n) => (isFinite(n) ? Math.round(n) + "%" : "—");
+/* signed money: +₱120 or −₱45 */
+const signedPeso = (n) => (n < 0 ? "−" : "+") + "₱" + Math.abs(Math.round(n || 0)).toLocaleString("en-PH");
 const today = () => new Date().toISOString().slice(0, 10);
 const monthName = (ym) => {
   const [y, m] = ym.split("-");
@@ -356,7 +360,7 @@ export default function ZenPasabuy() {
     const res = autoFulfil(nextProducts, orders);
     setProducts(res.products);
     if (res.filled) setOrders(res.orders);
-    ping(res.filled ? `${msg} — filled ${res.summary}` : msg);
+    ping(res.filled ? `${msg} — filled ${res.summary}${res.repriced.length ? ` · repriced ${res.repriced.join(", ")} to stay profitable` : ""}` : msg);
     setPName(""); setPStore(""); setPTotalJpy(""); setPQty("1"); setPPhoto(null); setPDate(today()); setPTarget("new");
   };
 
@@ -402,7 +406,7 @@ export default function ZenPasabuy() {
       const uj = parseFloat(lineUnitJpy) || 0;
       if (!lineName.trim() || uj <= 0) return ping("Custom item needs a name and a ¥ cost");
       const r = computePrice(uj, tier.margin, feePhp(source), rate, settings);
-      line = { id: Date.now(), productId: null, name: lineName.trim(), qty: q, unitJpy: uj, unitCost: r.trueCost, sell: sell || r.list, allocs: null, bought: false };
+      line = { id: Date.now(), productId: null, name: lineName.trim(), qty: q, unitJpy: uj, unitCost: r.trueCost, sell: sell || r.list, allocs: null, bought: false, estimated: true };
     }
     if (line.sell <= 0) return ping("Set a selling price first");
     setDraft({ ...draft, lines: [...draft.lines, line] });
@@ -423,6 +427,7 @@ export default function ZenPasabuy() {
     const used = {}; // lotId -> qty taken in this pass
     let filled = 0;
     const names = {};
+    const repriced = [];
     const newOrders = orderList.map((o) => {
       if (o.status === "completed") return o;
       let touched = false;
@@ -435,19 +440,22 @@ export default function ZenPasabuy() {
         allocs.forEach((a) => { used[a.lotId] = (used[a.lotId] || 0) + a.qty; });
         const cost = allocs.reduce((a, x) => a + x.unitCost * x.qty, 0) / l.qty;
         const uj = allocs.reduce((a, x) => a + x.unitJpy * x.qty, 0) / l.qty;
+        /* the estimate is now a real cost — lift the selling price if it would lose money */
+        let sell = l.sell;
+        if (!(sell > 0) || sell < match.floor || sell < cost) { sell = Math.max(match.list, roundUp10(cost * 1.15)); repriced.push(l.name); }
         touched = true; filled += 1;
         names[l.name] = (names[l.name] || 0) + l.qty;
-        return { ...l, bought: true, productId: match.id, unitCost: cost, unitJpy: uj, allocs };
+        return { ...l, bought: true, productId: match.id, unitCost: cost, unitJpy: uj, allocs, sell, estimated: false };
       });
       return touched ? { ...o, lines } : o;
     });
-    if (!filled) return { products: prodList, orders: orderList, filled: 0, summary: "" };
+    if (!filled) return { products: prodList, orders: orderList, filled: 0, summary: "", repriced: [] };
     const newProducts = prodList.map((p) => ({
       ...p,
       lots: p.lots.map((lot) => (used[lot.id] ? { ...lot, remaining: Math.max(0, lot.remaining - used[lot.id]) } : lot)),
     }));
     const summary = Object.entries(names).map(([n, q]) => `${q}× ${n}`).join(", ");
-    return { products: newProducts, orders: newOrders, filled, summary };
+    return { products: newProducts, orders: newOrders, filled, summary, repriced: [...new Set(repriced)] };
   };
 
   const lineMath = (l) => {
@@ -503,6 +511,12 @@ export default function ZenPasabuy() {
     ping("Item removed");
   };
 
+  const setLineSellPrice = (orderId, lineId, value) => {
+    const v = parseFloat(value);
+    if (!(v > 0)) return;
+    setOrders(orders.map((o) => (o.id === orderId ? { ...o, lines: o.lines.map((l) => (l.id === lineId ? { ...l, sell: v } : l)) } : o)));
+  };
+
   const addLineToOrder = (orderId) => {
     const o = orders.find((x) => x.id === orderId);
     if (!o) return;
@@ -521,7 +535,7 @@ export default function ZenPasabuy() {
       const uj = parseFloat(eJpy) || 0;
       if (!eName.trim() || uj <= 0) return ping("Custom item needs a name and a ¥ cost");
       const r = computePrice(uj, tier.margin, feePhp(source), rate, settings);
-      line = { id: Date.now(), productId: null, name: eName.trim(), qty: q, unitJpy: uj, unitCost: r.trueCost, sell: sell || r.list, allocs: null, bought: false };
+      line = { id: Date.now(), productId: null, name: eName.trim(), qty: q, unitJpy: uj, unitCost: r.trueCost, sell: sell || r.list, allocs: null, bought: false, estimated: true };
     }
     if (line.sell <= 0) return ping("Set a selling price first");
     remember("products", line.name);
@@ -770,7 +784,7 @@ export default function ZenPasabuy() {
   const StatBox = ({ title, php, sub, raw }) => (
     <div style={{ ...card, padding: 14 }}>
       <div style={{ ...label, marginBottom: 2 }}>{title}</div>
-      <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 23, fontWeight: 700, color: T.primary, lineHeight: 1.15 }}>
+      <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 23, fontWeight: 700, color: php < 0 ? DANGER : T.primary, lineHeight: 1.15 }}>
         {raw !== undefined ? raw : yen(toYen(php))}
       </div>
       {raw === undefined && <div style={{ fontSize: 10.5, color: T.muted }}>{peso(php)}</div>}
@@ -783,10 +797,10 @@ export default function ZenPasabuy() {
     </div>
   );
   const TagRow = ({ name, php, strong }) => (
-    <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", fontFamily: "'Quicksand', sans-serif", fontSize: 13, fontWeight: strong ? 700 : 500, color: strong ? T.primary : T.ink, gap: 10 }}>
-      <span style={{ color: strong ? T.primary : T.muted }}>{name}</span>
+    <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", fontFamily: "'Quicksand', sans-serif", fontSize: 13, fontWeight: strong || php < 0 ? 700 : 500, color: php < 0 ? DANGER : strong ? T.primary : T.ink, gap: 10 }}>
+      <span style={{ color: php < 0 ? DANGER : strong ? T.primary : T.muted }}>{name}</span>
       <span style={{ textAlign: "right" }}>
-        {yen(toYen(php))} <span style={{ color: T.muted, fontWeight: 500, fontSize: 12 }}>· {peso(php)}</span>
+        {yen(toYen(php))} <span style={{ color: php < 0 ? DANGER : T.muted, fontWeight: 500, fontSize: 12 }}>· {peso(php)}</span>
       </span>
     </div>
   );
@@ -1060,7 +1074,7 @@ export default function ZenPasabuy() {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 <StatBox title="Selling price" php={pageProduct.list} sub={`floor ${peso(pageProduct.floor)}`} />
                 <StatBox title="Avg cost / pc" php={avgCost} sub="landed + buffer + effort" />
-                <StatBox title="Profit margin" raw={`+${peso(unitProfit)}`} sub={`${pct(avgCost > 0 ? (unitProfit / avgCost) * 100 : NaN)} per piece at quote`} />
+                <StatBox title="Profit margin" php={unitProfit} raw={<span style={{ color: unitProfit < 0 ? DANGER : T.primary }}>{signedPeso(unitProfit)}</span>} sub={`${pct(avgCost > 0 ? (unitProfit / avgCost) * 100 : NaN)} per piece at quote`} />
                 <StatBox title="Inventory" raw={`${stock} / ${bought}`} sub={`${sold} sold so far`} />
               </div>
 
@@ -1074,7 +1088,7 @@ export default function ZenPasabuy() {
                     <span style={{ color: T.muted }}> · revenue </span>
                     <b style={{ color: T.primary }}>{peso(soldRevenue)}</b>
                     <span style={{ color: T.muted }}> ({yen(toYen(soldRevenue))}) · profit </span>
-                    <b style={{ color: T.good }}>+{peso(soldProfit)}</b>
+                    <b style={{ color: soldProfit < 0 ? DANGER : T.good }}>{signedPeso(soldProfit)}</b>
                   </div>
                 )}
               </div>
@@ -1219,7 +1233,7 @@ export default function ZenPasabuy() {
                         <td style={{ padding: "8px 12px", fontWeight: 700 }}>{ym === "—" ? "No date" : monthName(ym)}</td>
                         <td style={{ padding: "8px 12px", textAlign: "right" }}>{m.count}</td>
                         <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, color: T.primary }}>{peso(m.revenue)}</td>
-                        <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, color: T.good }}>+{peso(m.profit)}</td>
+                        <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, color: m.profit < 0 ? DANGER : T.good }}>{signedPeso(m.profit)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1403,7 +1417,7 @@ export default function ZenPasabuy() {
                               </span>
                             </div>
                             <div style={{ fontSize: 11, color: T.muted }}>
-                              sell {yen(toYen(l.sell))} ({peso(l.sell)}) each · profit <span style={{ color: T.good, fontWeight: 700 }}>+{peso(m.profit)} ({pct(m.margin)})</span>
+                              sell {yen(toYen(l.sell))} ({peso(l.sell)}) each · profit <span style={{ color: m.profit < 0 ? DANGER : T.good, fontWeight: 700 }}>{signedPeso(m.profit)} ({pct(m.margin)})</span>
                             </div>
                           </div>
                           <button onClick={() => setDraft({ ...draft, lines: draft.lines.filter((x) => x.id !== l.id) })} style={{ border: "none", background: "transparent", color: T.pink, fontSize: 15, cursor: "pointer" }}>✕</button>
@@ -1418,7 +1432,7 @@ export default function ZenPasabuy() {
                           <span style={{ color: T.muted }}> · spend {peso(m.spent)} · charge </span>
                           <b style={{ color: T.primary }}>{peso(m.revenue)}</b>
                           <span style={{ color: T.muted }}> · profit </span>
-                          <b style={{ color: T.good }}>+{peso(m.profit)} ({pct(m.margin)})</b>
+                          <b style={{ color: m.profit < 0 ? DANGER : T.good }}>{signedPeso(m.profit)} ({pct(m.margin)})</b>
                         </div>
                       );
                     })()}
@@ -1459,9 +1473,15 @@ export default function ZenPasabuy() {
                     </div>
                     <div style={{ textAlign: "right", flexShrink: 0 }}>
                       <div style={{ fontWeight: 700, color: T.primary, fontSize: 14 }}>{peso(m.revenue)}</div>
-                      <div style={{ fontSize: 11, color: T.good, fontWeight: 700 }}>+{peso(m.profit)} ({pct(m.margin)})</div>
+                      <div style={{ fontSize: 11, color: m.profit < 0 ? DANGER : T.good, fontWeight: 700 }}>{signedPeso(m.profit)} ({pct(m.margin)})</div>
                     </div>
                   </div>
+
+                  {m.profit < 0 && (
+                    <div style={{ marginTop: 8, padding: "7px 10px", borderRadius: 10, background: "rgba(214,69,69,0.10)", border: `1px solid ${DANGER}`, color: DANGER, fontSize: 11.5, fontWeight: 700 }}>
+                      ⚠️ This order loses {peso(Math.abs(m.profit))} — open it and raise the selling prices.
+                    </div>
+                  )}
 
                   {open && (
                     <div style={{ marginTop: 10 }}>
@@ -1479,7 +1499,7 @@ export default function ZenPasabuy() {
                                   </span>
                                 )}
                               </b>
-                              {editOrderId === o.id && phase !== "completed" ? (
+                              {editOrderId === o.id ? (
                                 <button onClick={() => removeLineFromOrder(o.id, l.id)} style={{ border: "none", background: "transparent", color: T.pink, fontSize: 15, cursor: "pointer" }}>✕</button>
                               ) : phase !== "completed" ? (
                                 <button onClick={() => toggleLineBought(o.id, l.id)} style={{ padding: "4px 10px", borderRadius: 999, border: "none", background: l.bought ? PHASE.ready.color : PHASE.sourcing.color, color: "#fff", fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Quicksand', sans-serif" }}>
@@ -1490,17 +1510,39 @@ export default function ZenPasabuy() {
                               )}
                             </div>
                             <div style={{ color: T.muted, fontSize: 11.5, marginTop: 2 }}>
-                              cost {yen(toYen(l.unitCost))} ({peso(l.unitCost)})/pc → sell {yen(toYen(l.sell))} ({peso(l.sell)})/pc · profit <span style={{ color: T.good, fontWeight: 700 }}>+{peso(lm.profit)} ({pct(lm.margin)})</span>
+                              cost {yen(toYen(l.unitCost))} ({peso(l.unitCost)})/pc → sell {yen(toYen(l.sell))} ({peso(l.sell)})/pc · profit <span style={{ color: lm.profit < 0 ? DANGER : T.good, fontWeight: 700 }}>{signedPeso(lm.profit)} ({pct(lm.margin)})</span>
                             </div>
                             {Array.isArray(l.allocs) && l.allocs.length > 0 && (
                               <div style={{ color: T.muted, fontSize: 11 }}>
                                 from batch: {l.allocs.map((a) => `${a.qty} pc (${a.date}${a.store ? " · " + a.store : ""})`).join(", ")}
                               </div>
                             )}
+                            {lm.profit < 0 && (
+                              <div style={{ color: DANGER, fontSize: 11, fontWeight: 700, marginTop: 2 }}>
+                                ⚠️ Selling below cost — raise the price by at least {peso(Math.abs(lm.profit) / l.qty)} per piece.
+                              </div>
+                            )}
+                            {editOrderId === o.id && (
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                                <span style={{ fontSize: 11, color: T.muted, fontWeight: 700 }}>Sell each ₱</span>
+                                <input type="number" inputMode="decimal" defaultValue={Math.round(l.sell)} onBlur={(e) => setLineSellPrice(o.id, l.id, e.target.value)}
+                                  style={{ ...inputStyle, width: 96, padding: "6px 10px", fontSize: 13 }} />
+                                {(() => {
+                                  const p = products.find((x) => x.id === l.productId);
+                                  const base = p ? { floor: p.floor, list: p.list } : { floor: roundUp5(l.unitCost * 1.2), list: roundUp10(l.unitCost * 1.35) };
+                                  return priceSuggestions(base.floor, base.list).map((x) => (
+                                    <button key={x.key} onClick={() => setLineSellPrice(o.id, l.id, x.value)}
+                                      style={{ padding: "5px 9px", borderRadius: 999, border: `1.5px solid ${Math.round(l.sell) === Math.round(x.value) ? T.primary : T.border}`, background: Math.round(l.sell) === Math.round(x.value) ? T.primary : T.paper, color: Math.round(l.sell) === Math.round(x.value) ? "#fff" : T.ink, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Quicksand', sans-serif" }}>
+                                      {x.label} {peso(x.value)}
+                                    </button>
+                                  ));
+                                })()}
+                              </div>
+                            )}
                           </div>
                         );
                       })}
-                      {editOrderId === o.id && phase !== "completed" && (
+                      {editOrderId === o.id && (
                         <div style={{ marginTop: 10, padding: 12, borderRadius: 14, background: T.soft, border: `1px solid ${T.border}` }}>
                           <span style={{ ...label, fontSize: 9.5 }}>Add another item</span>
                           <select value={eProdId} onChange={(e) => {
@@ -1583,18 +1625,16 @@ export default function ZenPasabuy() {
                             <button onClick={() => completeOrder(o.id)} style={{ ...primaryBtn, flex: 1, padding: 10, fontSize: 13 }}>
                               Received & paid ✓
                             </button>
-                            <button onClick={() => undoDispatch(o.id)} style={{ ...ghostBtn }}>Undo</button>
+                            <button onClick={() => undoDispatch(o.id)} style={{ ...ghostBtn }}>↩ Undo dispatch</button>
                           </>
                         )}
                         {phase === "completed" && (
-                          <button onClick={() => reopenOrder(o.id)} style={{ ...ghostBtn, flex: 1 }}>Reopen order</button>
+                          <button onClick={() => reopenOrder(o.id)} style={{ ...ghostBtn, flex: 1 }}>↩ Reopen order</button>
                         )}
-                        {phase !== "completed" && (
-                          <button onClick={() => { setEditOrderId(editOrderId === o.id ? null : o.id); setEProdId("custom"); setESell(""); setEName(""); setEJpy(""); setEQty("1"); }}
-                            style={{ ...ghostBtn, color: editOrderId === o.id ? T.primary : T.accent, borderColor: editOrderId === o.id ? T.primary : T.border }}>
-                            {editOrderId === o.id ? "Done editing" : "✎ Edit items"}
-                          </button>
-                        )}
+                        <button onClick={() => { setEditOrderId(editOrderId === o.id ? null : o.id); setEProdId("custom"); setESell(""); setEName(""); setEJpy(""); setEQty("1"); }}
+                          style={{ ...ghostBtn, color: editOrderId === o.id ? T.primary : T.accent, borderColor: editOrderId === o.id ? T.primary : T.border }}>
+                          {editOrderId === o.id ? "Done editing" : "✎ Edit items"}
+                        </button>
                         <button onClick={() => removeOrder(o.id)} style={{ ...ghostBtn, color: T.pink }}>Delete</button>
                       </div>
                     </div>
@@ -1778,8 +1818,17 @@ export default function ZenPasabuy() {
           </div>
         )}
 
-        <footer style={{ textAlign: "center", marginTop: 26, fontSize: 11, color: T.muted }}>
-          Zen Pasabuy v{APP_VERSION} · updated {APP_UPDATED} 🌸
+        {/* footer — refresh available from every page */}
+        <footer style={{ textAlign: "center", marginTop: 28, paddingTop: 18, borderTop: `1px solid ${T.border}` }}>
+          <button onClick={refreshApp} style={{ ...ghostBtn, borderColor: T.pink, color: T.accent, padding: "10px 18px" }}>
+            ↻ Refresh to latest version
+          </button>
+          <div style={{ fontSize: 11, color: T.muted, marginTop: 8 }}>
+            Zen Pasabuy v{APP_VERSION} · updated {APP_UPDATED} 🌸
+          </div>
+          <div style={{ fontSize: 10.5, color: T.muted, marginTop: 2 }}>
+            Your inventory, orders and settings are kept — this only refetches the app.
+          </div>
         </footer>
 
         {toast && (
