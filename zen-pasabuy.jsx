@@ -55,11 +55,29 @@ const DEFAULT_SETTINGS = {
 
 const DANGER = "#d64545"; /* losses always show in red, in every theme */
 
-const STORAGE_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
+/* ── accounts ──────────────────────────────────────────────────────────────
+   Passwords are stored as SHA-256 hashes of `PW_SALT:password`, never as
+   plain text. Add a tester by generating a hash in Set-up → Accounts
+   (owner only) and pasting a new line into this list.
+   Logins:  niz / 6348  ·  fujidemands / 1234
+──────────────────────────────────────────────────────────────────────────── */
+const PW_SALT = "zen-pasabuy-2026";
+const USERS = [
+  { u: "niz", name: "Niz", owner: true, h: "3c6aca2e5073d0823c8d283c9569752e63428a01942267669583b628aa519ad3" },
+  { u: "fujidemands", name: "Fuji Demands", h: "16470cce93cc44987ab099bf008695666909b65eb3ed67dfcdcf260f46922225" },
+];
+const SESSION_KEY = "zp-session";
+
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "6.8.0";
-const APP_UPDATED = "Aug 11, 2026 · 7:50 PM PHT";
+const APP_VERSION = "7.1.1";
+const APP_UPDATED = "Aug 12, 2026 · 2:37 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -206,7 +224,9 @@ function ZenLogo({ size = 44 }) {
 }
 
 /* ─────────────────────────────  APP  ───────────────────────────── */
-export default function ZenPasabuy() {
+function ZenPasabuy({ user, onLogout }) {
+  /* each account keeps its own data on this device; the owner keeps the original key */
+  const STORAGE_KEY = user?.owner ? LEGACY_KEY : `${LEGACY_KEY}:${user?.u || "guest"}`;
   const [tab, setTab] = useState("price");
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [products, setProducts] = useState([]);
@@ -215,6 +235,9 @@ export default function ZenPasabuy() {
   const [toast, setToast] = useState("");
   const [rateBusy, setRateBusy] = useState(false);
   const [storageWarn, setStorageWarn] = useState(false);
+  const [online, setOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine);
+  const [hashOut, setHashOut] = useState("");
+  const [hashPw, setHashPw] = useState("");
   const backupRef = useRef(null);
   const pagePhotoRef = useRef(null);
   const newPhotoRef = useRef(null);
@@ -308,6 +331,14 @@ export default function ZenPasabuy() {
       refreshRate(true);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
   }, []);
 
   useEffect(() => {
@@ -631,6 +662,14 @@ export default function ZenPasabuy() {
     return Object.entries(map).sort((a, b) => b[0].localeCompare(a[0]));
   }, [orders, period]); // eslint-disable-line
 
+  /* nudge to export a backup — browser storage can be cleared without warning */
+  const daysSinceBackup = settings.lastBackup ? Math.floor((Date.now() - new Date(settings.lastBackup).getTime()) / 86400000) : null;
+  const hasData = products.length > 0 || orders.length > 0;
+  const backupDue = hasData && (daysSinceBackup === null || daysSinceBackup >= 7);
+  const lastBackupLabel = settings.lastBackup
+    ? new Date(settings.lastBackup).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" })
+    : "never";
+
   const invStats = useMemo(() => {
     let stockValue = 0, potential = 0, pieces = 0, sold = 0;
     products.forEach((p) => {
@@ -693,7 +732,8 @@ export default function ZenPasabuy() {
     ping("Orders exported");
   };
   const exportJSON = () => {
-    download(`zen-pasabuy-backup-${today()}.json`, JSON.stringify({ app: "zen-pasabuy", version: 6, exportedAt: new Date().toISOString(), settings, products, orders }, null, 2), "application/json");
+    download(`zen-pasabuy-backup-${today()}.json`, JSON.stringify({ app: "zen-pasabuy", version: APP_VERSION, exportedAt: new Date().toISOString(), settings, products, orders }, null, 2), "application/json");
+    setSettings((s) => ({ ...s, lastBackup: new Date().toISOString() }));
     ping("Backup exported — photos included");
   };
   const importJSON = (file) => {
@@ -760,6 +800,17 @@ export default function ZenPasabuy() {
 
   const updTier = (i, patch) => setSettings({ ...settings, tiers: settings.tiers.map((t, j) => (j === i ? { ...t, ...patch } : t)) });
   const addTier = () => setSettings({ ...settings, tiers: [...settings.tiers, { id: "t" + Date.now(), name: "New tier", desc: "Describe it", margin: 25 }] });
+  const updSourcing = (i, patch) =>
+    setSettings({ ...settings, sourcing: settings.sourcing.map((x, j) => (j === i ? { ...x, ...patch } : x)) });
+  const addSourcing = () =>
+    setSettings({ ...settings, sourcing: [...settings.sourcing, { id: "s" + Date.now(), name: "New sourcing type", note: "When you use it", feeJpy: 100 }] });
+  const removeSourcing = (i) => {
+    if (settings.sourcing.length <= 1) return ping("Keep at least one sourcing type 🌸");
+    const gone = settings.sourcing[i];
+    setSettings({ ...settings, sourcing: settings.sourcing.filter((_, j) => j !== i) });
+    if (sourceId === gone.id) setSourceId(settings.sourcing.find((_, j) => j !== i)?.id);
+  };
+
   const removeTier = (i) => {
     if (settings.tiers.length <= 1) return ping("Keep at least one tier 🌸");
     const gone = settings.tiers[i];
@@ -849,6 +900,25 @@ export default function ZenPasabuy() {
             {rateBusy ? "fetching…" : "↻ refresh"}
           </button>
         </div>
+
+        {!online && (
+          <div style={{ ...card, background: T.soft, borderColor: T.pink, fontSize: 12.5, marginBottom: 14, padding: "10px 14px", textAlign: "center" }}>
+            📴 Offline — everything still works and saves on this device. The exchange rate will refresh when you're back online.
+          </div>
+        )}
+
+        {backupDue && (
+          <div style={{ ...card, borderLeft: `5px solid ${T.accent}`, fontSize: 12.5, marginBottom: 14, padding: "12px 14px" }}>
+            <b style={{ color: T.accent }}>Time for a backup 🌸</b>
+            <div style={{ color: T.muted, marginTop: 3 }}>
+              Last backup: {lastBackupLabel}{daysSinceBackup !== null ? ` · ${daysSinceBackup} day(s) ago` : ""}. Your data lives only on this device — clearing your browser would erase it.
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+              <button onClick={exportJSON} style={{ ...primaryBtn, flex: 1, padding: 10, fontSize: 13 }}>⬇ Back up now</button>
+              <button onClick={() => setSettings({ ...settings, lastBackup: new Date().toISOString() })} style={{ ...ghostBtn, color: T.muted }}>Remind me later</button>
+            </div>
+          </div>
+        )}
 
         {storageWarn && (
           <div style={{ ...card, background: "#fff8e6", borderColor: "#eedaa0", fontSize: 12.5, marginBottom: 14 }}>
@@ -1704,20 +1774,23 @@ export default function ZenPasabuy() {
 
             <div style={card}>
               <span style={label}>Logistics & effort fees (¥ per item)</span>
-              {settings.sourcing.map((s, i) => (
-                <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 10, marginTop: i ? 8 : 2 }}>
-                  <div style={{ flex: 1, fontWeight: 700, fontSize: 13.5 }}>
-                    {s.name}
-                    <div style={{ fontSize: 10.5, color: T.muted, fontWeight: 500 }}>{s.note} · ≈{peso(feePhp(s))}</div>
+              {settings.sourcing.map((sc, i) => (
+                <div key={sc.id} style={{ border: `1px solid ${T.border}`, borderRadius: 14, padding: 12, marginTop: i ? 10 : 4, background: T.soft }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <input value={sc.name} onChange={(e) => updSourcing(i, { name: e.target.value })} placeholder="Sourcing type" style={{ ...inputStyle, flex: 1, padding: "9px 12px", fontSize: 14 }} />
+                    <div style={{ position: "relative" }}>
+                      <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: T.muted, fontSize: 13, fontWeight: 700 }}>¥</span>
+                      <input type="number" inputMode="decimal" value={sc.feeJpy} onChange={(e) => updSourcing(i, { feeJpy: parseFloat(e.target.value) || 0 })} style={{ ...inputStyle, width: 92, padding: "9px 12px 9px 24px", textAlign: "right", fontSize: 14 }} />
+                    </div>
+                    <button onClick={() => removeSourcing(i)} title="Remove sourcing type" style={{ border: "none", background: "transparent", color: T.pink, fontSize: 16, cursor: "pointer" }}>✕</button>
                   </div>
-                  <div style={{ position: "relative" }}>
-                    <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: T.muted, fontSize: 13, fontWeight: 700 }}>¥</span>
-                    <input type="number" inputMode="decimal" value={s.feeJpy} onChange={(e) => setSettings({ ...settings, sourcing: settings.sourcing.map((x, j) => (j === i ? { ...x, feeJpy: parseFloat(e.target.value) || 0 } : x)) })} style={{ ...inputStyle, width: 96, textAlign: "right", paddingLeft: 24 }} />
-                  </div>
+                  <input value={sc.note} onChange={(e) => updSourcing(i, { note: e.target.value })} placeholder="When you use it" style={{ ...inputStyle, marginTop: 8, padding: "8px 12px", fontSize: 12.5, fontWeight: 500 }} />
+                  <div style={{ fontSize: 10.5, color: T.muted, marginTop: 6 }}>≈{peso(feePhp(sc))} per item at today's rate</div>
                 </div>
               ))}
+              <button onClick={addSourcing} style={{ ...dashedBtn, width: "100%", marginTop: 10 }}>+ Add a sourcing type</button>
               <div style={{ fontSize: 11, color: T.muted, marginTop: 10 }}>
-                Tip: total your train fare for the day in ¥, divide by the items you expect to source, and set that as your City run / Hunt fee.
+                Tip: total your train fare for the day in ¥, divide by the items you expect to source, and set that as your bigger-trip fee.
               </div>
             </div>
 
@@ -1767,6 +1840,44 @@ export default function ZenPasabuy() {
             </div>
 
             <div style={card}>
+              <span style={label}>Account</span>
+              <div style={{ fontSize: 13 }}>
+                Signed in as <b style={{ color: T.primary }}>{user?.name || user?.u}</b>
+                {user?.owner && <span style={{ color: T.muted }}> · owner</span>}
+              </div>
+              <div style={{ fontSize: 11, color: T.muted, marginTop: 4 }}>
+                Each account keeps its own data on this device. Signing out doesn't delete anything.
+              </div>
+              <button onClick={onLogout} style={{ ...ghostBtn, width: "100%", marginTop: 10, color: T.accent }}>Sign out</button>
+
+              {user?.owner && (
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${T.border}` }}>
+                  <span style={{ ...label, fontSize: 9.5 }}>Add a tester (owner only)</span>
+                  <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 8 }}>
+                    Type a password, copy the generated line, and paste it into the <code>USERS</code> list in the app files, then push to GitHub.
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input value={hashPw} onChange={(e) => setHashPw(e.target.value)} placeholder="new password" style={{ ...inputStyle, fontSize: 14 }} />
+                    <button
+                      onClick={async () => {
+                        if (!hashPw.trim()) return ping("Type a password first");
+                        const h = await sha256Hex(`${PW_SALT}:${hashPw.trim()}`);
+                        setHashOut(`{ u: "username", name: "Name", h: "${h}" },`);
+                        ping("Line generated — copy it below");
+                      }}
+                      style={{ ...primaryBtn, padding: "11px 16px", fontSize: 13 }}>
+                      Generate
+                    </button>
+                  </div>
+                  {hashOut && (
+                    <textarea readOnly value={hashOut} onFocus={(e) => e.target.select()}
+                      style={{ ...inputStyle, marginTop: 8, fontSize: 11, fontFamily: "ui-monospace, Menlo, monospace", height: 62, resize: "vertical" }} />
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div style={card}>
               <span style={label}>Refresh app</span>
               <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 10 }}>
                 Pull the latest version of the app. Use this after an update if you're still seeing an old version.
@@ -1811,8 +1922,12 @@ export default function ZenPasabuy() {
                 <button onClick={exportJSON} style={{ ...ghostBtn, flex: 1, color: T.accent }}>⬇ Export everything</button>
                 <button onClick={() => backupRef.current?.click()} style={{ ...ghostBtn, flex: 1, color: T.accent }}>⬆ Import backup</button>
               </div>
-              <div style={{ fontSize: 11, color: T.muted, marginTop: 8 }}>
+              <div style={{ fontSize: 12, color: backupDue ? T.accent : T.muted, marginTop: 10, fontWeight: backupDue ? 700 : 500 }}>
+                Last backup: {lastBackupLabel}{daysSinceBackup !== null ? ` · ${daysSinceBackup} day(s) ago` : ""}
+              </div>
+              <div style={{ fontSize: 11, color: T.muted, marginTop: 6 }}>
                 Inventory (with photos and purchase batches), orders, and settings in one JSON file — move it between phones or keep it as a record.
+                A reminder appears every 7 days, and when you move to a new web address you'll need this file to bring your data along.
               </div>
             </div>
           </div>
@@ -1829,6 +1944,9 @@ export default function ZenPasabuy() {
           <div style={{ fontSize: 10.5, color: T.muted, marginTop: 2 }}>
             Your inventory, orders and settings are kept — this only refetches the app.
           </div>
+          <div style={{ fontSize: 10.5, color: T.muted, marginTop: 6 }}>
+            {user?.name || user?.u} · <button onClick={onLogout} style={{ border: "none", background: "transparent", color: T.accent, fontWeight: 700, fontSize: 10.5, cursor: "pointer", padding: 0, textDecoration: "underline", fontFamily: "'Quicksand', sans-serif" }}>sign out</button>
+          </div>
         </footer>
 
         {toast && (
@@ -1839,4 +1957,105 @@ export default function ZenPasabuy() {
       </div>
     </div>
   );
+}
+
+
+/* ───────────────────────────  LOGIN + ROOT  ───────────────────────────
+   Note: this is a client-side gate for private testing, not real security.
+   Anyone who can read the page source can see the password hashes.
+   Keep it for keeping casual visitors out; real accounts need a backend.
+──────────────────────────────────────────────────────────────────────── */
+function LoginScreen({ onLogin }) {
+  const T = SWEETIES_THEME;
+  const [u, setU] = useState("");
+  const [p, setP] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    setErr("");
+    const name = u.trim().toLowerCase();
+    if (!name || !p) return setErr("Enter your username and password.");
+    setBusy(true);
+    try {
+      const found = USERS.find((x) => x.u.toLowerCase() === name);
+      const h = await sha256Hex(`${PW_SALT}:${p}`);
+      if (found && found.h === h) onLogin({ u: found.u, name: found.name || found.u, owner: !!found.owner });
+      else setErr("That username and password don't match.");
+    } catch (e) {
+      setErr("Couldn't sign in on this browser.");
+    }
+    setBusy(false);
+  };
+
+  const input = {
+    width: "100%", boxSizing: "border-box", padding: "13px 15px", borderRadius: 12,
+    border: `1.5px solid ${T.border}`, background: T.bg, color: T.ink,
+    fontFamily: "'Quicksand', system-ui, sans-serif", fontSize: 16, fontWeight: 600, outline: "none",
+  };
+
+  return (
+    <div style={{ minHeight: "100vh", background: `linear-gradient(180deg, ${T.bg} 0%, ${T.bg2} 100%)`, color: T.ink, fontFamily: "'Quicksand', system-ui, sans-serif", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Quicksand:wght@500;600;700&display=swap');
+        input::placeholder { color: ${T.pink}; font-weight: 500; }
+        input:focus { border-color: ${T.accent} !important; }
+      `}</style>
+      <div style={{ width: "100%", maxWidth: 360 }}>
+        <div style={{ textAlign: "center", marginBottom: 20 }}>
+          <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}><ZenLogo size={72} /></div>
+          <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 34, fontWeight: 600, color: T.primary, lineHeight: 1.05 }}>Zen Pasabuy</div>
+          <div style={{ fontSize: 12.5, color: T.muted, marginTop: 3, letterSpacing: "0.06em" }}>calm decisions, clear profits</div>
+        </div>
+
+        <div style={{ background: T.paper, border: `1px solid ${T.border}`, borderRadius: 18, padding: 20, boxShadow: "0 8px 24px rgba(128,29,92,0.10)" }}>
+          <div style={{ display: "grid", gap: 10 }}>
+            <input value={u} onChange={(e) => setU(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} placeholder="Username" autoCapitalize="none" autoCorrect="off" style={input} />
+            <input value={p} onChange={(e) => setP(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} placeholder="Password" type="password" style={input} />
+            {err && <div style={{ color: DANGER, fontSize: 12.5, fontWeight: 700 }}>{err}</div>}
+            <button onClick={submit} disabled={busy}
+              style={{ padding: 13, borderRadius: 14, border: "none", background: `linear-gradient(120deg, ${T.primary}, ${T.accent})`, color: "#fff", fontFamily: "'Quicksand', sans-serif", fontWeight: 700, fontSize: 15, cursor: "pointer" }}>
+              {busy ? "Checking…" : "Sign in"}
+            </button>
+          </div>
+          <div style={{ fontSize: 11, color: T.muted, marginTop: 12, textAlign: "center" }}>
+            Private testing. Ask Niz for an account.
+          </div>
+        </div>
+
+        <div style={{ textAlign: "center", fontSize: 10.5, color: T.muted, marginTop: 14 }}>
+          v{APP_VERSION} · updated {APP_UPDATED} 🌸
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ZenPasabuyRoot() {
+  const [user, setUser] = useState(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SESSION_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        const still = USERS.find((x) => x.u === saved.u);
+        if (still) setUser({ u: still.u, name: still.name || still.u, owner: !!still.owner });
+      }
+    } catch (e) { /* no session */ }
+    setReady(true);
+  }, []);
+
+  const handleLogin = (u) => {
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify({ u: u.u })); } catch (e) { /* private mode */ }
+    setUser(u);
+  };
+  const handleLogout = () => {
+    try { localStorage.removeItem(SESSION_KEY); } catch (e) { /* ignore */ }
+    setUser(null);
+  };
+
+  if (!ready) return <div style={{ minHeight: "100vh", background: SWEETIES_THEME.bg }} />;
+  return user ? <ZenPasabuy user={user} onLogout={handleLogout} /> : <LoginScreen onLogin={handleLogin} />;
 }
