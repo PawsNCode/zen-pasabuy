@@ -95,8 +95,8 @@ async function sha256Hex(text) {
 const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "7.9.1";
-const APP_UPDATED = "Aug 12, 2026 · 9:36 PM PHT";
+const APP_VERSION = "7.9.2";
+const APP_UPDATED = "Aug 12, 2026 · 9:44 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -1476,16 +1476,37 @@ function ZenPasabuy({ user, onLogout }) {
 
             <div style={card}>
               <span style={label}>Shipping — how much box space?</span>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                {shipClasses.map((s) => (
-                  <Chip key={s.id} active={shipId === s.id} onClick={() => setShipId(s.id)} title={s.name} sub={s.feeJpy > 0 ? `+${yen(s.feeJpy)}` : "free"} />
-                ))}
+              <div style={{ display: "grid", gap: 8 }}>
+                {shipClasses.map((s) => {
+                  const on = shipId === s.id;
+                  return (
+                    <button key={s.id} onClick={() => setShipId(s.id)}
+                      style={{ display: "flex", gap: 10, alignItems: "flex-start", textAlign: "left", width: "100%", padding: "10px 12px", borderRadius: 14, border: `1.5px solid ${on ? T.primary : T.border}`, background: on ? T.primary : T.paper, color: on ? "#fff" : T.ink, cursor: "pointer", fontFamily: "'Quicksand', sans-serif", transition: "all .15s" }}>
+                      <span style={{ width: 16, height: 16, borderRadius: 999, border: `2px solid ${on ? "#fff" : T.pink}`, background: on ? "#fff" : "transparent", flexShrink: 0, marginTop: 3, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                        {on && <span style={{ width: 7, height: 7, borderRadius: 999, background: T.primary, display: "block" }} />}
+                      </span>
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
+                          <span style={{ fontWeight: 700, fontSize: 13.5 }}>{s.name}</span>
+                          <span style={{ flexShrink: 0, fontWeight: 700, fontSize: 12.5, color: on ? "#fff" : T.primary }}>
+                            {s.feeJpy > 0 ? `+${yen(s.feeJpy)}` : "free"}
+                          </span>
+                        </span>
+                        <span style={{ display: "block", fontSize: 11, marginTop: 3, lineHeight: 1.4, fontWeight: 500, color: on ? "rgba(255,255,255,.88)" : T.muted }}>
+                          {s.note}
+                        </span>
+                        <span style={{ display: "block", fontSize: 10.5, marginTop: 2, fontWeight: 600, color: on ? "rgba(255,255,255,.72)" : T.pink }}>
+                          {s.feeJpy > 0
+                            ? `${peso(s.feeJpy * rate)} per piece${Number(s.liters) > 0 ? ` · about ${s.liters} L of box space` : ""}`
+                            : "nothing added for the box"}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
-              <div style={{ fontSize: 11.5, color: T.muted, marginTop: 8 }}>
-                {shipClass?.note}
-                {shipClass?.feeJpy > 0
-                  ? <> · adds {yen(shipClass.feeJpy)} ({M(shipPhp(shipClass))}) per piece</>
-                  : <> · nothing added for the box</>}
+              <div style={{ fontSize: 11, color: T.muted, marginTop: 9 }}>
+                Not sure? Picture the item next to a shoebox. Rename these sizes, reword the descriptions, or add your own in <b>Set-up</b>.
               </div>
             </div>
 
