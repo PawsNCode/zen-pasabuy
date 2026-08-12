@@ -65,6 +65,13 @@ const DEFAULT_SETTINGS = {
   memory: { shops: [], locations: [], customers: [], products: [] },
 };
 
+/* suggested-price levels — same colours in every theme so profit reads at a glance */
+const PRICE_LEVEL = {
+  floor: { color: "#c25462", meaning: "thinnest profit — only if she haggles hard" },
+  best: { color: "#4f8a63", meaning: "your normal asking price" },
+  premium: { color: "#a8722a", meaning: "fattest profit — rare finds and rush jobs" },
+};
+
 const DANGER = "#d64545"; /* losses always show in red, in every theme */
 
 /* ── accounts ──────────────────────────────────────────────────────────────
@@ -88,8 +95,8 @@ async function sha256Hex(text) {
 const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "7.8.1";
-const APP_UPDATED = "Aug 12, 2026 · 10:40 PM PHT";
+const APP_VERSION = "7.8.2";
+const APP_UPDATED = "Aug 12, 2026 · 11:25 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -575,9 +582,9 @@ function ZenPasabuy({ user, onLogout }) {
 
   /* suggested selling prices for a product (or a freshly computed item) */
   const priceSuggestions = (floor, best) => [
-    { key: "floor", label: "Floor", value: floor, note: "lowest safe" },
-    { key: "best", label: "Best", value: best, note: "recommended" },
-    { key: "premium", label: "Premium", value: roundUp10(best * 1.12), note: "rare / rush" },
+    { key: "floor", label: "Floor", value: floor, note: "lowest safe", color: PRICE_LEVEL.floor.color },
+    { key: "best", label: "Best", value: best, note: "recommended", color: PRICE_LEVEL.best.color },
+    { key: "premium", label: "Premium", value: roundUp10(best * 1.12), note: "rare / rush", color: PRICE_LEVEL.premium.color },
   ];
 
   /* when stock arrives, fill any order line still waiting for that product */
@@ -2063,7 +2070,7 @@ function ZenPasabuy({ user, onLogout }) {
                             const on = Math.round(parseFloat(lineSell) || 0) === Math.round(x.value);
                             return (
                               <button key={x.key} onClick={() => setLineSell(String(x.value))}
-                                style={{ padding: "6px 11px", borderRadius: 999, border: `1.5px solid ${on ? T.primary : T.border}`, background: on ? T.primary : T.paper, color: on ? "#fff" : T.ink, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Quicksand', sans-serif" }}>
+                                style={{ padding: "6px 11px", borderRadius: 999, border: `1.5px solid ${x.color}`, background: on ? x.color : T.paper, color: on ? "#fff" : x.color, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Quicksand', sans-serif", boxShadow: on ? `0 0 0 2.5px ${x.color}33` : "none" }}>
                                 {x.label} {M(x.value)}
                                 <span style={{ opacity: .75, fontWeight: 500 }}> · {x.note}</span>
                               </button>
@@ -2302,7 +2309,7 @@ function ZenPasabuy({ user, onLogout }) {
                                   const base = p ? { floor: p.floor, list: p.list } : { floor: roundUp5(l.unitCost * 1.2), list: roundUp10(l.unitCost * 1.35) };
                                   return priceSuggestions(base.floor, base.list).map((x) => (
                                     <button key={x.key} onClick={() => setLineSellPrice(o.id, l.id, x.value)}
-                                      style={{ padding: "5px 9px", borderRadius: 999, border: `1.5px solid ${Math.round(l.sell) === Math.round(x.value) ? T.primary : T.border}`, background: Math.round(l.sell) === Math.round(x.value) ? T.primary : T.paper, color: Math.round(l.sell) === Math.round(x.value) ? "#fff" : T.ink, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Quicksand', sans-serif" }}>
+                                      style={{ padding: "5px 9px", borderRadius: 999, border: `1.5px solid ${x.color}`, background: Math.round(l.sell) === Math.round(x.value) ? x.color : T.paper, color: Math.round(l.sell) === Math.round(x.value) ? "#fff" : x.color, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Quicksand', sans-serif", boxShadow: Math.round(l.sell) === Math.round(x.value) ? `0 0 0 2.5px ${x.color}33` : "none" }}>
                                       {x.label} {M(x.value)}
                                     </button>
                                   ));
@@ -2368,7 +2375,7 @@ function ZenPasabuy({ user, onLogout }) {
                                     const on = Math.round(parseFloat(eSell) || 0) === Math.round(x.value);
                                     return (
                                       <button key={x.key} onClick={() => setESell(String(x.value))}
-                                        style={{ padding: "6px 11px", borderRadius: 999, border: `1.5px solid ${on ? T.primary : T.border}`, background: on ? T.primary : T.paper, color: on ? "#fff" : T.ink, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Quicksand', sans-serif" }}>
+                                        style={{ padding: "6px 11px", borderRadius: 999, border: `1.5px solid ${x.color}`, background: on ? x.color : T.paper, color: on ? "#fff" : x.color, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Quicksand', sans-serif", boxShadow: on ? `0 0 0 2.5px ${x.color}33` : "none" }}>
                                         {x.label} {M(x.value)}
                                         <span style={{ opacity: .75, fontWeight: 500 }}> · {x.note}</span>
                                       </button>
@@ -2427,8 +2434,42 @@ function ZenPasabuy({ user, onLogout }) {
                 ["Choose the period", "This month, this year, or all time — the totals above follow whichever you pick."],
                 ["Start a new order", "Type the customer's name and their location, then add what they want, line by line."],
                 ["Add items from stock or as pre-orders", "Picking a product from stock reserves the pieces straight away. If you don't have it yet, add it by name only — it waits as a pre-order and fills itself in the moment you log that purchase in Price it."],
-                ["Follow the colours", "Red is still sourcing. Amber means everything's bought and prices need a look. Blue is ready to send. Green is dispatched. Grey is received and paid — the order is closed."],
-                ["Check prices before dispatching", "At the amber stage you can still edit any line. The Floor / Best / Premium chips show safe prices so you never send something out at a loss."],
+                ["Follow the colours", (
+                  <div style={{ marginTop: 5 }}>
+                    Every order carries a colour so you know what it needs without opening it.
+                    <div style={{ marginTop: 7, border: `1px solid ${T.border}`, borderRadius: 12, overflow: "hidden" }}>
+                      {[
+                        ["sourcing", "You're still out buying the items"],
+                        ["review", "Everything's bought — look over the prices"],
+                        ["ready", "Checked and packed, waiting to be sent"],
+                        ["dispatched", "On its way — stock has left your inventory"],
+                        ["completed", "Received and paid — profit is counted"],
+                      ].map(([k, what], j) => (
+                        <div key={k} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 10px", background: j % 2 ? T.paper : "transparent", borderTop: j ? `1px solid ${T.border}` : "none" }}>
+                          <span style={{ width: 15, height: 15, borderRadius: 5, background: PHASE[k].color, flexShrink: 0, border: "1px solid rgba(0,0,0,.14)" }} />
+                          <b style={{ fontSize: 11, color: PHASE[k].color, width: 108, flexShrink: 0, letterSpacing: "0.03em" }}>{PHASE[k].label}</b>
+                          <span style={{ fontSize: 11.5 }}>{what}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )],
+                ["Check prices before dispatching", (
+                  <div style={{ marginTop: 5 }}>
+                    At the amber stage every line can still be edited. Tap a coloured chip to drop that price straight in —
+                    the colour tells you how much profit you're taking.
+                    <div style={{ marginTop: 7, border: `1px solid ${T.border}`, borderRadius: 12, overflow: "hidden" }}>
+                      {[["floor", "Floor"], ["best", "Best"], ["premium", "Premium"]].map(([k, name], j) => (
+                        <div key={k} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 10px", background: j % 2 ? T.paper : "transparent", borderTop: j ? `1px solid ${T.border}` : "none" }}>
+                          <span style={{ width: 15, height: 15, borderRadius: 5, background: PRICE_LEVEL[k].color, flexShrink: 0, border: "1px solid rgba(0,0,0,.14)" }} />
+                          <b style={{ fontSize: 11, color: PRICE_LEVEL[k].color, width: 108, flexShrink: 0, letterSpacing: "0.03em" }}>{name.toUpperCase()}</b>
+                          <span style={{ fontSize: 11.5 }}>{PRICE_LEVEL[k].meaning}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ marginTop: 6 }}>Never go below the red one — that's your break-even plus the smallest margin you agreed to.</div>
+                  </div>
+                )],
                 ["Mark it dispatched, then received and paid", "Stock comes off your inventory on dispatch, and profit is counted once the order is closed."],
                 ["Search and filter", "Find any order by customer, product or location, and narrow by status when you're chasing what's still open."],
               ]}
