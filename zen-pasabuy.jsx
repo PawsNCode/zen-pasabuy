@@ -95,8 +95,8 @@ async function sha256Hex(text) {
 const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "7.9.3";
-const APP_UPDATED = "Aug 12, 2026 · 9:53 PM PHT";
+const APP_VERSION = "7.9.4";
+const APP_UPDATED = "Aug 12, 2026 · 9:56 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -2630,6 +2630,14 @@ function ZenPasabuy({ user, onLogout }) {
                 <span style={{ color: T.muted }}> ({peso(yenPerLitre(dBox) * rate)} per litre)</span>.
               </div>
 
+              <button onClick={recalcShipping} style={{ ...primaryBtn, width: "100%", padding: 12, fontSize: 13.5, marginTop: 10 }}>
+                ↻ Apply {yen(Math.round(yenPerLitre(dBox)))}/L to my shipping sizes
+              </button>
+              <div style={{ fontSize: 10.5, color: T.muted, marginTop: 7, lineHeight: 1.45 }}>
+                Rewrites the ¥ on every size that has litres set. Sizes on 0 L stay free.
+                The change lands in the card below as unsaved — press Save changes there to keep it.
+              </div>
+
               {/* collapsible: how that ¥ per litre was reached */}
               <div style={{ marginTop: 10, border: `1px solid ${T.border}`, borderRadius: 14, overflow: "hidden" }}>
                 <button onClick={() => setShowBoxMath(!showBoxMath)}
@@ -2675,15 +2683,6 @@ function ZenPasabuy({ user, onLogout }) {
                         formula="landed + buffer + sourcing + box share = true cost"
                         value="Price it"
                         note="so the freight is already inside the price you quote the customer" />
-                      <div style={{ padding: "10px 13px", borderTop: `1px solid ${T.border}` }}>
-                        <button onClick={recalcShipping} style={{ ...primaryBtn, width: "100%", padding: 11, fontSize: 13.5 }}>
-                          ↻ Apply {yen(Math.round(perL))}/L to my shipping sizes
-                        </button>
-                        <div style={{ fontSize: 10.5, color: T.muted, marginTop: 7, lineHeight: 1.45 }}>
-                          Rewrites the ¥ on every size that has litres set. Sizes on 0 L stay free.
-                          The change lands in the card below as unsaved — press Save changes there to keep it.
-                        </div>
-                      </div>
                     </div>
                   );
                 })()}
