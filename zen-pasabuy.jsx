@@ -50,6 +50,16 @@ const DEFAULT_SETTINGS = {
     { id: "city", name: "City run", feeJpy: 520, note: "Train fare + half a day" },
     { id: "hunt", name: "Multi-store hunt", feeJpy: 830, note: "Full-day hunting" },
   ],
+  shipping: [
+    { id: "hand", name: "Hand-carry", note: "Coming home in your own luggage — no box cost", liters: 0, feeJpy: 0 },
+    { id: "xs", name: "Tiny", note: "Sachet, keychain, single charm", liters: 0.5, feeJpy: 35 },
+    { id: "s", name: "Small", note: "Snack box, one skincare bottle", liters: 1.5, feeJpy: 100 },
+    { id: "m", name: "Medium", note: "About a shoebox", liters: 4, feeJpy: 270 },
+    { id: "l", name: "Large", note: "Roughly a quarter of a jumbo box", liters: 8, feeJpy: 540 },
+    { id: "xl", name: "Bulky", note: "Plushie, big carton, bedding", liters: 15, feeJpy: 1000 },
+  ],
+  box: { costJpy: 14000, liters: 260, fillPct: 80 },
+  guidesExpanded: true,
   theme: { ...SWEETIES_THEME },
   displayCcy: "jpy", // "jpy" (default) or "php" — which currency leads everywhere
   memory: { shops: [], locations: [], customers: [], products: [] },
@@ -78,8 +88,8 @@ async function sha256Hex(text) {
 const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "7.7.1";
-const APP_UPDATED = "Aug 12, 2026 · 4:20 PM PHT";
+const APP_VERSION = "7.8.0";
+const APP_UPDATED = "Aug 12, 2026 · 9:05 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -95,13 +105,23 @@ const monthName = (ym) => {
   return new Date(Number(y), Number(m) - 1, 1).toLocaleString("en-PH", { month: "short", year: "numeric" });
 };
 
-function computePrice(unitJpy, tierMargin, feePhp, rate, settings) {
+function computePrice(unitJpy, tierMargin, feePhp, rate, settings, shipPhp) {
+  const ship = shipPhp || 0;
   const landed = unitJpy * rate;
   const bufferAmt = landed * (settings.buffer / 100);
-  const trueCost = landed + bufferAmt + feePhp;
+  const trueCost = landed + bufferAmt + feePhp + ship;
   const floor = roundUp5(trueCost * (1 + tierMargin / 100));
   const list = roundUp10(floor * (1 + settings.negotiation / 100));
-  return { landed, bufferAmt, fee: feePhp, trueCost, floor, list, profitAtList: list - trueCost, profitAtFloor: floor - trueCost };
+  return { landed, bufferAmt, fee: feePhp, ship, trueCost, floor, list, profitAtList: list - trueCost, profitAtFloor: floor - trueCost };
+}
+
+/* ¥ per litre of box space, from the box cost the user entered in Set-up */
+function yenPerLitre(box) {
+  const b = box || {};
+  const liters = Number(b.liters) || 0;
+  const fill = (Number(b.fillPct) || 100) / 100;
+  if (!(liters > 0) || !(fill > 0)) return 0;
+  return (Number(b.costJpy) || 0) / liters / fill;
 }
 
 async function fetchLiveRate() {
@@ -304,6 +324,9 @@ function ZenPasabuy({ user, onLogout }) {
   const [hashOut, setHashOut] = useState("");
   const [dTiers, setDTiers] = useState(null);      // unsaved tier edits
   const [dSourcing, setDSourcing] = useState(null); // unsaved sourcing edits
+  const [dShipping, setDShipping] = useState(null); // unsaved shipping-class edits
+  const [dBox, setDBox] = useState(null);           // unsaved box-cost edits
+  const [guideOpen, setGuideOpen] = useState({});   // per-page tutorial open/closed
   const [hashPw, setHashPw] = useState("");
   const backupRef = useRef(null);
   const pagePhotoRef = useRef(null);
@@ -320,6 +343,7 @@ function ZenPasabuy({ user, onLogout }) {
   const [tierId, setTierId] = useState("basic");
   const [showMath, setShowMath] = useState(false);
   const [sourceId, setSourceId] = useState("nearby");
+  const [shipId, setShipId] = useState("s");
 
   /* Orders state */
   const emptyDraft = () => ({ customer: "", location: "", orderDate: today(), eta: "", lines: [] });
@@ -375,6 +399,9 @@ function ZenPasabuy({ user, onLogout }) {
             s = { ...DEFAULT_SETTINGS, ...d.settings, theme: { ...SWEETIES_THEME, ...(d.settings.theme || {}) } };
             /* migrate ₱ sourcing fees → ¥ */
             s.sourcing = (s.sourcing || []).map((x) => (x.feeJpy != null ? x : { ...x, feeJpy: Math.round((x.fee || 0) / 0.385) }));
+            /* shipping classes arrived in v7.8 — give older data the starter set */
+            if (!Array.isArray(s.shipping) || !s.shipping.length) s.shipping = DEFAULT_SETTINGS.shipping.map((x) => ({ ...x }));
+            if (!s.box) s.box = { ...DEFAULT_SETTINGS.box };
           }
           let prods = [];
           if (Array.isArray(d.products)) prods = d.products;
@@ -424,6 +451,8 @@ function ZenPasabuy({ user, onLogout }) {
   /* drafts follow the saved settings until the user starts editing */
   useEffect(() => { setDTiers(settings.tiers.map((t) => ({ ...t }))); }, [settings.tiers]);
   useEffect(() => { setDSourcing(settings.sourcing.map((x) => ({ ...x }))); }, [settings.sourcing]);
+  useEffect(() => { setDShipping((settings.shipping || []).map((x) => ({ ...x }))); }, [settings.shipping]);
+  useEffect(() => { setDBox({ ...DEFAULT_SETTINGS.box, ...(settings.box || {}) }); }, [settings.box]);
 
   const rate = settings.rateMode === "live" && settings.liveRate ? settings.liveRate : settings.manualRate || 0.385;
   const toYen = (php) => (rate ? php / rate : 0);
@@ -437,13 +466,17 @@ function ZenPasabuy({ user, onLogout }) {
   const source = settings.sourcing.find((s) => s.id === sourceId) || settings.sourcing[0];
   const feePhp = (s) => (s?.feeJpy || 0) * rate;
 
+  const shipClasses = (settings.shipping && settings.shipping.length ? settings.shipping : DEFAULT_SETTINGS.shipping);
+  const shipClass = shipClasses.find((s) => s.id === shipId) || shipClasses[0];
+  const shipPhp = (s) => (s?.feeJpy || 0) * rate;
+
   const restockProduct = products.find((p) => p.id === Number(pTarget));
   const totalJpyNum = parseFloat(pTotalJpy) || 0;
   const qtyNum = Math.max(1, parseInt(pQty) || 1);
   const unitJpy = totalJpyNum / qtyNum;
   const result = useMemo(
-    () => (unitJpy > 0 && tier ? computePrice(unitJpy, tier.margin, feePhp(source), rate, settings) : null),
-    [unitJpy, tier, source, rate, settings] // eslint-disable-line
+    () => (unitJpy > 0 && tier ? computePrice(unitJpy, tier.margin, feePhp(source), rate, settings, shipPhp(shipClass)) : null),
+    [unitJpy, tier, source, shipClass, rate, settings] // eslint-disable-line
   );
 
   /* choosing a product to restock prefills the form from its most recent purchase */
@@ -460,6 +493,7 @@ function ZenPasabuy({ user, onLogout }) {
     setPPhoto(null);
     const t = settings.tiers.find((x) => x.name === p?.tierName);
     if (t) setTierId(t.id);
+    if (lot?.shipId && shipClasses.some((x) => x.id === lot.shipId)) setShipId(lot.shipId);
   };
 
   const attachNewPhoto = async (file) => {
@@ -469,7 +503,7 @@ function ZenPasabuy({ user, onLogout }) {
 
   const saveProduct = () => {
     if (!result) return;
-    const lot = { id: Date.now(), date: pDate || today(), store: pStore.trim(), qty: qtyNum, remaining: qtyNum, totalJpy: totalJpyNum, unitJpy, unitCost: result.trueCost };
+    const lot = { id: Date.now(), date: pDate || today(), store: pStore.trim(), qty: qtyNum, remaining: qtyNum, totalJpy: totalJpyNum, unitJpy, unitCost: result.trueCost, shipId: shipClass?.id || null, shipName: shipClass?.name || "", shipJpy: shipClass?.feeJpy || 0 };
     let nextProducts;
     let msg;
     if (restockProduct) {
@@ -1074,6 +1108,8 @@ function ZenPasabuy({ user, onLogout }) {
   /* ── tiers & sourcing are edited as drafts, then saved ── */
   const tiersDirty = !!dTiers && JSON.stringify(dTiers) !== JSON.stringify(settings.tiers);
   const sourcingDirty = !!dSourcing && JSON.stringify(dSourcing) !== JSON.stringify(settings.sourcing);
+  const shippingDirty = !!dShipping && JSON.stringify(dShipping) !== JSON.stringify(settings.shipping || []);
+  const boxDirty = !!dBox && JSON.stringify(dBox) !== JSON.stringify({ ...DEFAULT_SETTINGS.box, ...(settings.box || {}) });
 
   const updTier = (i, patch) => setDTiers((d) => d.map((t, j) => (j === i ? { ...t, ...patch } : t)));
   const addTier = () => setDTiers((d) => [...d, { id: "t" + Date.now(), name: "New tier", desc: "Describe it", margin: 25 }]);
@@ -1089,8 +1125,22 @@ function ZenPasabuy({ user, onLogout }) {
     setDSourcing((d) => d.filter((_, j) => j !== i));
   };
 
+  const updShipping = (i, patch) => setDShipping((d) => d.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+  const addShipping = () => setDShipping((d) => [...d, { id: "sh" + Date.now(), name: "New size", note: "What fits in it", liters: 1, feeJpy: Math.round(yenPerLitre(dBox) || 60) }]);
+  const removeShipping = (i) => {
+    if (dShipping.length <= 1) return ping("Keep at least one shipping size 🌸");
+    setDShipping((d) => d.filter((_, j) => j !== i));
+  };
+  /* recompute every size's ¥ from litres × the box's ¥ per litre */
+  const recalcShipping = () => {
+    const perL = yenPerLitre(dBox);
+    if (!(perL > 0)) return ping("Fill in the box cost and capacity first");
+    setDShipping((d) => d.map((x) => (Number(x.liters) > 0 ? { ...x, feeJpy: Math.round(Number(x.liters) * perL) } : { ...x, feeJpy: 0 })));
+    ping(`Sizes recomputed at ${yen(Math.round(perL))} per litre`);
+  };
+
   /* keep a rolling history of the settings that were in use before each save */
-  const snapshotOf = (st) => ({ tiers: st.tiers, sourcing: st.sourcing, buffer: st.buffer, negotiation: st.negotiation });
+  const snapshotOf = (st) => ({ tiers: st.tiers, sourcing: st.sourcing, shipping: st.shipping, box: st.box, buffer: st.buffer, negotiation: st.negotiation });
   const withHistory = (st, label) => {
     const prev = { id: Date.now(), at: new Date().toISOString(), label, ...snapshotOf(st) };
     const hist = [prev, ...(st.history || [])]
@@ -1111,19 +1161,32 @@ function ZenPasabuy({ user, onLogout }) {
     if (!dSourcing.some((x) => x.id === sourceId)) setSourceId(dSourcing[0]?.id);
     ping("Sourcing fees saved 🌸");
   };
+  const saveShipping = () => {
+    const history = withHistory(settings, "before shipping change");
+    setSettings({ ...settings, shipping: dShipping, box: dBox, history });
+    if (!dShipping.some((x) => x.id === shipId)) setShipId(dShipping[0]?.id);
+    ping("Shipping sizes saved 🌸");
+  };
   const discardTiers = () => { setDTiers(settings.tiers.map((t) => ({ ...t }))); ping("Tier changes discarded"); };
   const discardSourcing = () => { setDSourcing(settings.sourcing.map((x) => ({ ...x }))); ping("Fee changes discarded"); };
+  const discardShipping = () => {
+    setDShipping((settings.shipping || []).map((x) => ({ ...x })));
+    setDBox({ ...DEFAULT_SETTINGS.box, ...(settings.box || {}) });
+    ping("Shipping changes discarded");
+  };
 
   const saveAsDefault = () => {
-    if (tiersDirty || sourcingDirty) return ping("Save your changes first, then set them as default");
+    if (tiersDirty || sourcingDirty || shippingDirty || boxDirty) return ping("Save your changes first, then set them as default");
     setSettings({ ...settings, defaults: snapshotOf(settings) });
     ping("Saved as your default setup 🌸");
   };
   const applySnapshot = (snap, msg) => {
     const history = withHistory(settings, "before restore");
-    setSettings({ ...settings, tiers: snap.tiers, sourcing: snap.sourcing, buffer: snap.buffer ?? settings.buffer, negotiation: snap.negotiation ?? settings.negotiation, history });
+    const shipSnap = snap.shipping && snap.shipping.length ? snap.shipping : settings.shipping;
+    setSettings({ ...settings, tiers: snap.tiers, sourcing: snap.sourcing, shipping: shipSnap, box: snap.box || settings.box, buffer: snap.buffer ?? settings.buffer, negotiation: snap.negotiation ?? settings.negotiation, history });
     if (!snap.tiers.some((t) => t.id === tierId)) setTierId(snap.tiers[0]?.id);
     if (!snap.sourcing.some((x) => x.id === sourceId)) setSourceId(snap.sourcing[0]?.id);
+    if (!shipSnap.some((x) => x.id === shipId)) setShipId(shipSnap[0]?.id);
     ping(msg);
   };
 
@@ -1164,6 +1227,39 @@ function ZenPasabuy({ user, onLogout }) {
       </span>
     </div>
   );
+
+  /* ── page tutorial, shown at the bottom of every page ── */
+  const Guide = ({ id, title, steps, tips }) => {
+    const open = guideOpen[id] !== undefined ? guideOpen[id] : settings.guidesExpanded !== false;
+    return (
+      <div style={{ background: T.soft, border: `1px solid ${T.border}`, borderRadius: 18, overflow: "hidden", marginTop: 4 }}>
+        <button
+          onClick={() => setGuideOpen({ ...guideOpen, [id]: !open })}
+          style={{ width: "100%", padding: "13px 16px", border: "none", background: "transparent", color: T.ink, fontFamily: "'Quicksand', sans-serif", fontWeight: 700, fontSize: 13.5, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, textAlign: "left" }}>
+          <span>📖 How to use {title}</span>
+          <span style={{ color: T.muted, fontSize: 12, flexShrink: 0 }}>{open ? "▲ hide" : "▼ show"}</span>
+        </button>
+        {open && (
+          <div style={{ padding: "0 16px 14px" }}>
+            {steps.map((s, i) => (
+              <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "9px 0", borderTop: `1px solid ${T.border}` }}>
+                <span style={{ width: 20, height: 20, borderRadius: 999, background: T.primary, color: "#fff", fontSize: 11, fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>{i + 1}</span>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 12.5 }}>{s[0]}</div>
+                  <div style={{ fontSize: 11.5, color: T.muted, marginTop: 2, lineHeight: 1.45 }}>{s[1]}</div>
+                </div>
+              </div>
+            ))}
+            {(tips || []).map((t, i) => (
+              <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "8px 0 0", fontSize: 11.5, color: T.muted, lineHeight: 1.45 }}>
+                <span style={{ flexShrink: 0 }}>💡</span><div>{t}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const tabs = [
     { id: "price", label: "Price it" },
@@ -1366,6 +1462,21 @@ function ZenPasabuy({ user, onLogout }) {
               </div>
             </div>
 
+            <div style={card}>
+              <span style={label}>Shipping — how much box space?</span>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                {shipClasses.map((s) => (
+                  <Chip key={s.id} active={shipId === s.id} onClick={() => setShipId(s.id)} title={s.name} sub={s.feeJpy > 0 ? `+${yen(s.feeJpy)}` : "free"} />
+                ))}
+              </div>
+              <div style={{ fontSize: 11.5, color: T.muted, marginTop: 8 }}>
+                {shipClass?.note}
+                {shipClass?.feeJpy > 0
+                  ? <> · adds {yen(shipClass.feeJpy)} ({M(shipPhp(shipClass))}) per piece</>
+                  : <> · nothing added for the box</>}
+              </div>
+            </div>
+
             {result ? (
               <>
                 <div style={{ background: T.paper, border: `1.5px solid ${T.pink}`, borderRadius: 20, overflow: "hidden", boxShadow: "0 8px 24px rgba(0,0,0,0.10)" }}>
@@ -1382,6 +1493,7 @@ function ZenPasabuy({ user, onLogout }) {
                     <TagRow name={qtyNum > 1 ? `Unit cost (${qtyNum} pcs bought)` : "Landed cost"} php={result.landed} />
                     <TagRow name="Buffer" php={result.bufferAmt} />
                     <TagRow name={`Logistics & effort (${yen(source.feeJpy)})`} php={result.fee} />
+                    {result.ship > 0 && <TagRow name={`Box share — ${shipClass.name} (${yen(shipClass.feeJpy)})`} php={result.ship} />}
                     <TagRow name="True cost per piece" php={result.trueCost} strong />
                     <div style={{ borderTop: `1px solid ${T.border}`, margin: "6px 0" }} />
                     <TagRow name="Profit per piece at quote" php={result.profitAtList} strong />
@@ -1428,24 +1540,28 @@ function ZenPasabuy({ user, onLogout }) {
                           formula={`${yen(source.feeJpy)} × ₱${r4} = ${M(result.fee)}`}
                           value={M(result.fee)}
                           note="train fare + time, per piece" />
-                        <Step n="4" title="Your true cost per piece"
-                          formula={`${M(result.landed)} + ${M(result.bufferAmt)} + ${M(result.fee)} = ${M(result.trueCost)}`}
+                        <Step n="4" title={`Box share — ${shipClass?.name || "shipping"}`}
+                          formula={result.ship > 0 ? `${yen(shipClass.feeJpy)} × ₱${r4} = ${M(result.ship)}` : "no box cost for this size"}
+                          value={M(result.ship)}
+                          note={`this size takes about ${shipClass?.liters || 0} L of the balikbayan box`} />
+                        <Step n="5" title="Your true cost per piece"
+                          formula={`${M(result.landed)} + ${M(result.bufferAmt)} + ${M(result.fee)} + ${M(result.ship)} = ${M(result.trueCost)}`}
                           value={M(result.trueCost)}
                           note="break-even — selling below this loses money" />
-                        <Step n="5" title={`Floor price — ${tier.name} tier (+${tier.margin}%)`}
+                        <Step n="6" title={`Floor price — ${tier.name} tier (+${tier.margin}%)`}
                           formula={`${M(result.trueCost)} × ${(1 + tier.margin / 100).toFixed(2)} = ${M(result.trueCost * (1 + tier.margin / 100))} → rounded up to ${M(result.floor)}`}
                           value={M(result.floor)}
                           note="rounded up to the nearest ₱5 — the lowest you should ever agree to" />
-                        <Step n="6" title={`Quote price (+${settings.negotiation}% haggle room)`}
+                        <Step n="7" title={`Quote price (+${settings.negotiation}% haggle room)`}
                           formula={`${M(result.floor)} × ${(1 + settings.negotiation / 100).toFixed(2)} = ${M(result.floor * (1 + settings.negotiation / 100))} → rounded up to ${M(result.list)}`}
                           value={M(result.list)}
                           note="rounded up to the nearest ₱10 — what you tell the customer" />
-                        <Step n="7" title="Profit check"
+                        <Step n="8" title="Profit check"
                           formula={`${M(result.list)} − ${M(result.trueCost)} = ${M(result.profitAtList)} (${pct((result.profitAtList / result.trueCost) * 100)} of cost)`}
                           value={`+${M(result.profitAtList)}`}
                           note={`if haggled down to the floor: +${M(result.profitAtFloor)}${qtyNum > 1 ? ` · whole batch: +${M(result.profitAtList * qtyNum)}` : ""}`} />
                         <div style={{ padding: "10px 16px", fontSize: 11, color: T.muted, borderTop: `1px solid ${T.border}` }}>
-                          Every percentage above is editable in <b>Set-up</b> — buffer, haggle room, tier margins, and sourcing fees.
+                          Every percentage above is editable in <b>Set-up</b> — buffer, haggle room, tier margins, sourcing fees, and shipping sizes.
                         </div>
                       </div>
                     );
@@ -1486,6 +1602,23 @@ function ZenPasabuy({ user, onLogout }) {
                 Type the total ¥ price and quantity — wholesale per-piece cost, quote, and stock are all recorded together.
               </div>
             )}
+
+            <Guide id="price" title="Price it"
+              steps={[
+                ["Say what you're logging", "Leave it on “A new product” for a first-time find, or pick “Restock” to buy more of something you already sell — restocking fills in the shop, price and quantity from your last purchase so you only change what's different."],
+                ["Fill in the shop and the date", "Both are remembered for the batch, so later you can see exactly where and when each piece came from."],
+                ["Type the total ¥ you're paying and how many pieces", "Type what the till says, not the per-piece price. If you buy 6 for ¥1,200, type 1200 and 6 — the per-piece cost is worked out for you."],
+                ["Pick the tier", "How hard was this to get hold of? Everyday items earn a small margin, hunted-down and limited items earn more."],
+                ["Pick how you sourced it", "This adds a ¥ fee per piece for train fare and your time — an online order costs you far less effort than a full day of store-hopping."],
+                ["Pick the shipping size", "How much balikbayan box space one piece takes. This adds that piece's share of the box cost, so freight is already inside the price you quote."],
+                ["Read the quote", "The big number is what you tell the customer. The smaller “never go below” number is your floor — the lowest you should agree to after haggling."],
+                ["Open the computation if you want to check it", "Tap “Show the computation” to see every step, from yen to the final peso price."],
+                ["Save it", "The product lands in Inventory with its stock count. If a customer already pre-ordered it, that order is filled automatically."],
+              ]}
+              tips={[
+                "Every percentage and fee here — buffer, haggle room, tiers, sourcing, shipping sizes — is yours to change in Set-up.",
+                "Quoting a price you already know is fine: type it into the order line instead. This page is for working out what the price should be.",
+              ]} />
           </div>
         )}
 
@@ -1578,6 +1711,18 @@ function ZenPasabuy({ user, onLogout }) {
               </div>
 
               <button onClick={() => removeProduct(pageProduct.id)} style={{ ...ghostBtn, color: T.pink }}>Delete this product</button>
+
+              <Guide id="product" title="this product page"
+                steps={[
+                  ["Check the numbers at the top", "Stock on hand, what's been sold, your average cost per piece, and the profit each remaining piece carries."],
+                  ["Look through the purchase batches", "Every time you bought this item is kept separately with its own date, shop, quantity and cost — that's how the app keeps old and new prices apart."],
+                  ["Add or change the photo", "A photo makes the product much faster to spot in a long list and travels with your backup."],
+                  ["Restock this product", "The button jumps to Price it with the last purchase already filled in, so you only correct what changed."],
+                  ["Read the inventory history", "Purchases and sales in order, so you can trace where every piece went."],
+                ]}
+                tips={[
+                  "Deleting a product doesn't rewrite past orders — those keep the numbers they were saved with.",
+                ]} />
             </div>
           );
         })()}
@@ -1717,6 +1862,20 @@ function ZenPasabuy({ user, onLogout }) {
                 </div>
               );
             })}
+
+            <Guide id="inventory" title="Inventory"
+              steps={[
+                ["Read the three boxes on top", "Stock value is what your unsold pieces cost you. Potential is what they'd bring in if they all sold at your quote. Sold counts pieces that have left."],
+                ["Search or filter", "Type a product or shop name in the search box, or narrow the list down to a single shop."],
+                ["Switch between Cards and Sheet", "Cards are easy to skim on a phone. Sheet lays everything out in columns — cost, sell price, profit, margin — and scrolls sideways with the product name pinned."],
+                ["Tap any product to open its page", "Its page shows every purchase batch, every sale, the photo, and a running history."],
+                ["Restock from Price it", "To add more pieces, go to Price it and choose Restock — or use the button on the product's own page."],
+                ["Keep a backup", "Excel gives you a readable sheet. Backup (with photos) gives you the full JSON file that can be imported into another phone."],
+              ]}
+              tips={[
+                "Stock counts fall by themselves as orders are dispatched — the oldest batch always sells first, so your costs stay honest.",
+                "A product showing SOLD OUT still keeps its whole history; it just has nothing left on the shelf.",
+              ]} />
           </div>
         )}
 
@@ -2262,6 +2421,21 @@ function ZenPasabuy({ user, onLogout }) {
                 </div>
               );
             })}
+
+            <Guide id="orders" title="Orders"
+              steps={[
+                ["Choose the period", "This month, this year, or all time — the totals above follow whichever you pick."],
+                ["Start a new order", "Type the customer's name and their location, then add what they want, line by line."],
+                ["Add items from stock or as pre-orders", "Picking a product from stock reserves the pieces straight away. If you don't have it yet, add it by name only — it waits as a pre-order and fills itself in the moment you log that purchase in Price it."],
+                ["Follow the colours", "Red is still sourcing. Amber means everything's bought and prices need a look. Blue is ready to send. Green is dispatched. Grey is received and paid — the order is closed."],
+                ["Check prices before dispatching", "At the amber stage you can still edit any line. The Floor / Best / Premium chips show safe prices so you never send something out at a loss."],
+                ["Mark it dispatched, then received and paid", "Stock comes off your inventory on dispatch, and profit is counted once the order is closed."],
+                ["Search and filter", "Find any order by customer, product or location, and narrow by status when you're chasing what's still open."],
+              ]}
+              tips={[
+                "Any order can still be edited after dispatch or completion if something needs correcting.",
+                "A line shown in red is losing money — reprice it before the order goes out.",
+              ]} />
           </div>
         )}
 
@@ -2359,6 +2533,69 @@ function ZenPasabuy({ user, onLogout }) {
               </div>
             </div>
 
+            {/* ── shipping sizes ── */}
+            <div style={card}>
+              <span style={label}>Balikbayan box cost{boxDirty ? " · unsaved" : ""}</span>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                <div>
+                  <span style={{ ...label, fontSize: 9, marginBottom: 3 }}>Box cost ¥</span>
+                  <input type="number" inputMode="decimal" value={dBox?.costJpy ?? ""} onChange={(e) => setDBox({ ...dBox, costJpy: parseFloat(e.target.value) || 0 })} style={{ ...inputStyle, padding: "10px 10px", fontSize: 14 }} />
+                </div>
+                <div>
+                  <span style={{ ...label, fontSize: 9, marginBottom: 3 }}>Capacity L</span>
+                  <input type="number" inputMode="decimal" value={dBox?.liters ?? ""} onChange={(e) => setDBox({ ...dBox, liters: parseFloat(e.target.value) || 0 })} style={{ ...inputStyle, padding: "10px 10px", fontSize: 14 }} />
+                </div>
+                <div>
+                  <span style={{ ...label, fontSize: 9, marginBottom: 3 }}>Fill %</span>
+                  <input type="number" inputMode="decimal" value={dBox?.fillPct ?? ""} onChange={(e) => setDBox({ ...dBox, fillPct: parseFloat(e.target.value) || 0 })} style={{ ...inputStyle, padding: "10px 10px", fontSize: 14 }} />
+                </div>
+              </div>
+              <div style={{ fontSize: 11.5, color: T.muted, marginTop: 8, lineHeight: 1.5 }}>
+                Everything you pay to get one box to your customer's city — freight, provincial charge, pickup fee, the box itself.
+                A jumbo box is about 75 × 55 × 63 cm ≈ 260 L. Fill % is how much of it you realistically pack; the rest is air you still pay for.
+              </div>
+              <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 12, background: T.bg, border: `1px solid ${T.border}`, fontSize: 12.5 }}>
+                That works out to <b style={{ color: T.primary }}>{yen(Math.round(yenPerLitre(dBox)))}</b> per litre of box space
+                <span style={{ color: T.muted }}> ({M(yenPerLitre(dBox) * rate)} per litre)</span>.
+              </div>
+            </div>
+
+            <div style={card}>
+              <span style={label}>Shipping sizes (¥ per item){shippingDirty ? " · unsaved" : ""}</span>
+              {(dShipping || []).map((sh, i) => (
+                <div key={sh.id} style={{ border: `1px solid ${T.border}`, borderRadius: 14, padding: 12, marginTop: i ? 10 : 4, background: T.soft }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <input value={sh.name} onChange={(e) => updShipping(i, { name: e.target.value })} placeholder="Size name" style={{ ...inputStyle, flex: 1, padding: "9px 12px", fontSize: 14 }} />
+                    <div style={{ position: "relative" }}>
+                      <input type="number" inputMode="decimal" step="0.5" value={sh.liters ?? 0} onChange={(e) => updShipping(i, { liters: parseFloat(e.target.value) || 0 })} style={{ ...inputStyle, width: 74, padding: "9px 22px 9px 10px", textAlign: "right", fontSize: 14 }} />
+                      <span style={{ position: "absolute", right: 9, top: "50%", transform: "translateY(-50%)", color: T.muted, fontSize: 12, fontWeight: 700 }}>L</span>
+                    </div>
+                    <div style={{ position: "relative" }}>
+                      <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: T.muted, fontSize: 13, fontWeight: 700 }}>¥</span>
+                      <input type="number" inputMode="decimal" value={sh.feeJpy} onChange={(e) => updShipping(i, { feeJpy: parseFloat(e.target.value) || 0 })} style={{ ...inputStyle, width: 90, padding: "9px 10px 9px 24px", textAlign: "right", fontSize: 14 }} />
+                    </div>
+                    <button onClick={() => removeShipping(i)} title="Remove size" style={{ border: "none", background: "transparent", color: T.pink, fontSize: 16, cursor: "pointer" }}>✕</button>
+                  </div>
+                  <input value={sh.note || ""} onChange={(e) => updShipping(i, { note: e.target.value })} placeholder="What fits in this size" style={{ ...inputStyle, marginTop: 8, padding: "8px 12px", fontSize: 12.5, fontWeight: 500 }} />
+                  <div style={{ fontSize: 10.5, color: T.muted, marginTop: 6 }}>≈{M(shipPhp(sh))} per item at today's rate</div>
+                </div>
+              ))}
+              <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                <button onClick={addShipping} style={{ ...dashedBtn, flex: "1 1 150px" }}>+ Add a size</button>
+                <button onClick={recalcShipping} style={{ ...ghostBtn, color: T.accent, flex: "1 1 150px" }}>↻ Recompute ¥ from litres</button>
+              </div>
+              {(shippingDirty || boxDirty) && (
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <button onClick={saveShipping} style={{ ...primaryBtn, flex: 1, padding: 11, fontSize: 14 }}>Save changes</button>
+                  <button onClick={discardShipping} style={{ ...ghostBtn, color: T.muted }}>Discard</button>
+                </div>
+              )}
+              <div style={{ fontSize: 11, color: T.muted, marginTop: 10, lineHeight: 1.5 }}>
+                Each size carries its share of the box. Set the litres a size takes and tap Recompute, or type the ¥ yourself and ignore litres.
+                Keep a free size (like Hand-carry) for anything that never goes in a box.
+              </div>
+            </div>
+
             {/* defaults + history */}
             <div style={card}>
               <span style={label}>Default setup & history</span>
@@ -2375,7 +2612,7 @@ function ZenPasabuy({ user, onLogout }) {
               </div>
               {settings.defaults && (
                 <div style={{ fontSize: 11, color: T.muted, marginTop: 6 }}>
-                  Default: {settings.defaults.tiers.length} tier(s) · {settings.defaults.sourcing.length} sourcing type(s) · buffer {settings.defaults.buffer}% · haggle {settings.defaults.negotiation}%
+                  Default: {settings.defaults.tiers.length} tier(s) · {settings.defaults.sourcing.length} sourcing type(s) · {(settings.defaults.shipping || []).length} shipping size(s) · buffer {settings.defaults.buffer}% · haggle {settings.defaults.negotiation}%
                 </div>
               )}
 
@@ -2394,6 +2631,11 @@ function ZenPasabuy({ user, onLogout }) {
                         <div style={{ color: T.muted, fontSize: 11 }}>
                           {h.sourcing.map((x) => `${x.name} ¥${x.feeJpy}`).join(" · ")}
                         </div>
+                        {(h.shipping || []).length > 0 && (
+                          <div style={{ color: T.muted, fontSize: 11 }}>
+                            {h.shipping.map((x) => `${x.name} ¥${x.feeJpy}`).join(" · ")}
+                          </div>
+                        )}
                       </div>
                       <button onClick={() => applySnapshot(h, "Previous setup restored 🌸")} style={{ ...ghostBtn, flexShrink: 0, color: T.accent, padding: "7px 11px", fontSize: 11.5 }}>Restore</button>
                     </div>
@@ -2406,6 +2648,17 @@ function ZenPasabuy({ user, onLogout }) {
                     Clear history
                   </button>
                 )}
+              </div>
+            </div>
+
+            <div style={card}>
+              <span style={label}>Page guides</span>
+              <div style={{ fontSize: 12.5, color: T.muted }}>
+                Every page has a “How to use” panel at the bottom. Choose whether those open by themselves or stay tucked away.
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                <Chip active={settings.guidesExpanded !== false} onClick={() => { setSettings({ ...settings, guidesExpanded: true }); setGuideOpen({}); }} title="Open by default" sub="best while learning" />
+                <Chip active={settings.guidesExpanded === false} onClick={() => { setSettings({ ...settings, guidesExpanded: false }); setGuideOpen({}); }} title="Keep collapsed" sub="tap to read" />
               </div>
             </div>
 
@@ -2523,6 +2776,22 @@ function ZenPasabuy({ user, onLogout }) {
                 A reminder appears every 7 days, and when you move to a new web address you'll need this file to bring your data along.
               </div>
             </div>
+
+            <Guide id="setup" title="Set-up"
+              steps={[
+                ["Set the exchange rate", "Live rate follows the market. My own rate is for when you already changed cash at a fixed rate — use that number so your costs match reality."],
+                ["Set your buffer and haggle room", "Buffer quietly covers rate swings, packaging and small extras. Haggle room is the padding above your floor, so there's something to give away when a customer bargains."],
+                ["Shape your tiers", "Rename them, rewrite the description, change the margin, add or remove as many as you like. Changes only take effect when you press Save."],
+                ["Set your sourcing fees", "Put a ¥ figure on the effort of each way you get items. Add up a day's train fare, divide by the items you expect to find, and use that for your bigger trips."],
+                ["Enter your balikbayan box cost", "Total what one box costs door to door, its capacity in litres, and how full you realistically pack it. The app turns that into a ¥ per litre figure."],
+                ["Build your shipping sizes", "Give each size the litres it takes, tap Recompute, and every size gets its fair share of the box. Or type the ¥ yourself and ignore litres entirely."],
+                ["Save a default you trust", "Once your setup feels right, save it as your default. Every later change is kept in history, so you can always roll back."],
+                ["Back up regularly", "Export everything writes one JSON file with your inventory, photos, orders and settings. That file is the only way to move data to another phone."],
+              ]}
+              tips={[
+                "Nothing in this app talks to a server — everything lives on this device, which is why the backup file matters so much.",
+                "Recompute rewrites every size that has litres set. Anything on 0 L stays free.",
+              ]} />
           </div>
         )}
 
