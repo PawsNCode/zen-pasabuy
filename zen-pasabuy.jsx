@@ -78,8 +78,8 @@ async function sha256Hex(text) {
 const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "7.7.0";
-const APP_UPDATED = "Aug 12, 2026 · 3:21 PM PHT";
+const APP_VERSION = "7.7.1";
+const APP_UPDATED = "Aug 12, 2026 · 4:20 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -1177,14 +1177,21 @@ function ZenPasabuy({ user, onLogout }) {
     <div style={{ minHeight: "100vh", background: `linear-gradient(180deg, ${T.bg} 0%, ${T.bg2} 100%)`, color: T.ink, fontFamily: "'Quicksand', system-ui, sans-serif" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Quicksand:wght@500;600;700&display=swap');
+        *, *::before, *::after { box-sizing: border-box; }
+        html, body { overflow-x: hidden; }
         input::placeholder { color: ${T.pink}; font-weight: 500; }
         input:focus, select:focus { border-color: ${T.accent} !important; }
         button:active { transform: scale(.98); }
         select { appearance: none; }
+        /* iOS gives inputs an intrinsic width that blows out flex and grid rows */
+        input, select, textarea { min-width: 0; max-width: 100%; }
+        input[type="date"] { -webkit-appearance: none; appearance: none; }
+        input[type="color"] { flex-shrink: 0; }
+        button { max-width: 100%; }
         @media (prefers-reduced-motion: reduce){ *{transition:none!important} }
       `}</style>
 
-      <div style={{ maxWidth: 560, margin: "0 auto", padding: "22px 16px 60px" }}>
+      <div style={{ maxWidth: 560, margin: "0 auto", padding: "22px 16px 60px", overflowX: "hidden" }}>
         <datalist id="zp-shops">{memShops.map((v) => <option key={v} value={v} />)}</datalist>
         <datalist id="zp-locations">{memLocations.map((v) => <option key={v} value={v} />)}</datalist>
         <datalist id="zp-customers">{memCustomers.map((v) => <option key={v} value={v} />)}</datalist>
@@ -1305,13 +1312,13 @@ function ZenPasabuy({ user, onLogout }) {
                 <input value={pStore} onChange={(e) => setPStore(e.target.value)} placeholder="Shop (e.g., Don Quijote Shibuya)" list="zp-shops" style={inputStyle} />
                 <div>
                   <span style={{ ...label, fontSize: 9.5, marginBottom: 3 }}>Date bought</span>
-                  <input type="date" value={pDate} onChange={(e) => setPDate(e.target.value)} style={{ ...inputStyle, fontSize: 13.5 }} />
+                  <input type="date" value={pDate} onChange={(e) => setPDate(e.target.value)} style={{ ...inputStyle, fontSize: 13.5, width: "100%", display: "block" }} />
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   <div style={{ width: 54, height: 54, borderRadius: 12, background: T.soft, border: `1px dashed ${T.pink}`, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>
                     {pPhoto ? <img src={pPhoto} alt="product" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : restockProduct?.photo ? <img src={restockProduct.photo} alt="product" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : "📷"}
                   </div>
-                  <button onClick={() => newPhotoRef.current?.click()} style={{ ...ghostBtn, color: T.accent, flex: 1 }}>
+                  <button onClick={() => newPhotoRef.current?.click()} style={{ ...ghostBtn, color: T.accent, flex: "1 1 140px", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {pPhoto ? "Change photo" : restockProduct?.photo ? "Replace product photo" : "+ Add a product photo"}
                   </button>
                   {pPhoto && <button onClick={() => setPPhoto(null)} style={{ ...ghostBtn, color: T.pink }}>✕</button>}
@@ -1322,7 +1329,7 @@ function ZenPasabuy({ user, onLogout }) {
 
             <div style={card}>
               <span style={label}>What you're paying</span>
-              <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.6fr", gap: 8 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1.4fr minmax(0, 0.6fr)", gap: 8 }}>
                 <div style={{ position: "relative" }}>
                   <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", fontFamily: "'Cormorant Garamond', serif", fontSize: 22, color: T.accent, fontWeight: 700 }}>¥</span>
                   <input type="number" inputMode="decimal" value={pTotalJpy} onChange={(e) => setPTotalJpy(e.target.value)} placeholder="Total price" style={{ ...inputStyle, paddingLeft: 34, fontSize: 18 }} />
@@ -1828,14 +1835,14 @@ function ZenPasabuy({ user, onLogout }) {
                 <div style={{ display: "grid", gap: 8 }}>
                   <input value={draft.customer} onChange={(e) => setDraft({ ...draft, customer: e.target.value })} placeholder="Customer name" list="zp-customers" style={inputStyle} />
                   <input value={draft.location} onChange={(e) => setDraft({ ...draft, location: e.target.value })} placeholder="Location (e.g., Quezon City)" list="zp-locations" style={inputStyle} />
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                    <div>
+                  <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 8 }}>
+                    <div style={{ minWidth: 0 }}>
                       <span style={{ ...label, fontSize: 9.5, marginBottom: 3 }}>Order date</span>
-                      <input type="date" value={draft.orderDate} onChange={(e) => setDraft({ ...draft, orderDate: e.target.value })} style={{ ...inputStyle, fontSize: 13.5 }} />
+                      <input type="date" value={draft.orderDate} onChange={(e) => setDraft({ ...draft, orderDate: e.target.value })} style={{ ...inputStyle, fontSize: 13.5, width: "100%", display: "block" }} />
                     </div>
-                    <div>
+                    <div style={{ minWidth: 0 }}>
                       <span style={{ ...label, fontSize: 9.5, marginBottom: 3 }}>Expected arrival</span>
-                      <input type="date" value={draft.eta} onChange={(e) => setDraft({ ...draft, eta: e.target.value })} style={{ ...inputStyle, fontSize: 13.5 }} />
+                      <input type="date" value={draft.eta} onChange={(e) => setDraft({ ...draft, eta: e.target.value })} style={{ ...inputStyle, fontSize: 13.5, width: "100%", display: "block" }} />
                     </div>
                   </div>
                 </div>
@@ -1866,7 +1873,7 @@ function ZenPasabuy({ user, onLogout }) {
                   })()}
                   {lineProdId === "custom" && (
                     <>
-                      <div style={{ display: "grid", gridTemplateColumns: "1.3fr 0.7fr", gap: 8, marginTop: 8 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "1.3fr minmax(0, 0.7fr)", gap: 8, marginTop: 8 }}>
                         <input value={lineName} onChange={(e) => setLineName(e.target.value)} placeholder="What are they asking for?" list="zp-products" style={{ ...inputStyle, fontSize: 14 }} />
                         <input disabled value="" placeholder="¥ cost/pc" style={{ ...inputStyle, fontSize: 14, opacity: 0.5, cursor: "not-allowed" }} />
                       </div>
@@ -1875,7 +1882,7 @@ function ZenPasabuy({ user, onLogout }) {
                       </div>
                     </>
                   )}
-                  <div style={{ display: "grid", gridTemplateColumns: "0.6fr 1fr 0.9fr", gap: 8, marginTop: 8, alignItems: "end" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 0.6fr) minmax(0, 1fr) minmax(0, 0.9fr)", gap: 8, marginTop: 8, alignItems: "end" }}>
                     <div>
                       <span style={{ ...label, fontSize: 9.5, marginBottom: 3 }}>Qty</span>
                       <input type="number" inputMode="numeric" min="1" disabled={!lineProduct} value={lineProduct ? lineQty : ""} onChange={(e) => setLineQty(e.target.value)} style={{ ...inputStyle, textAlign: "center", fontSize: 14, opacity: lineProduct ? 1 : 0.5, cursor: lineProduct ? "text" : "not-allowed" }} />
@@ -2166,7 +2173,7 @@ function ZenPasabuy({ user, onLogout }) {
                           </select>
                           {eProdId === "custom" && (
                             <>
-                              <div style={{ display: "grid", gridTemplateColumns: "1.3fr 0.7fr", gap: 8, marginTop: 8 }}>
+                              <div style={{ display: "grid", gridTemplateColumns: "1.3fr minmax(0, 0.7fr)", gap: 8, marginTop: 8 }}>
                                 <input value={eName} onChange={(e) => setEName(e.target.value)} placeholder="What are they asking for?" list="zp-products" style={{ ...inputStyle, fontSize: 14 }} />
                                 <input disabled value="" placeholder="¥ cost/pc" style={{ ...inputStyle, fontSize: 14, opacity: 0.5, cursor: "not-allowed" }} />
                               </div>
@@ -2175,7 +2182,7 @@ function ZenPasabuy({ user, onLogout }) {
                               </div>
                             </>
                           )}
-                          <div style={{ display: "grid", gridTemplateColumns: "0.6fr 1fr 0.9fr", gap: 8, marginTop: 8, alignItems: "end" }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 0.6fr) minmax(0, 1fr) minmax(0, 0.9fr)", gap: 8, marginTop: 8, alignItems: "end" }}>
                             {(() => { const ep = products.find((x) => x.id === Number(eProdId)); return (
                               <>
                                 <div>
