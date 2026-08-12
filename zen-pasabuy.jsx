@@ -30,7 +30,8 @@ const THEME_PRESETS = [
 /* order lifecycle colors (consistent across themes so red/blue/green always read) */
 const PHASE = {
   sourcing: { color: "#c25462", label: "SOURCING", note: "items still being bought" },
-  ready: { color: "#4f6db0", label: "READY", note: "all items bought" },
+  review: { color: "#d99a2b", label: "CHECK PRICES", note: "all items bought — review before dispatch" },
+  ready: { color: "#4f6db0", label: "READY", note: "reviewed, ready to dispatch" },
   dispatched: { color: "#5a8a6a", label: "DISPATCHED", note: "on its way" },
   completed: { color: "#af8a8f", label: "RECEIVED & PAID ✓", note: "order closed" },
 };
@@ -76,8 +77,8 @@ async function sha256Hex(text) {
 const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "7.1.1";
-const APP_UPDATED = "Aug 12, 2026 · 2:37 PM PHT";
+const APP_VERSION = "7.4.0";
+const APP_UPDATED = "Aug 12, 2026 · 2:56 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -156,6 +157,10 @@ function allocateFIFO(product, qty, draftUsed = {}) {
 }
 const productStock = (p) => (p.lots || []).reduce((a, l) => a + (l.remaining || 0), 0);
 const productBought = (p) => (p.lots || []).reduce((a, l) => a + (l.qty || 0), 0);
+const latestLot = (p) => {
+  const lots = [...(p?.lots || [])].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")) || a.id - b.id);
+  return lots[lots.length - 1] || null;
+};
 const productAvgCost = (p) => {
   const q = productBought(p);
   return q ? (p.lots || []).reduce((a, l) => a + l.unitCost * l.qty, 0) / q : 0;
@@ -165,7 +170,8 @@ const productAvgCost = (p) => {
 const orderPhase = (o) => {
   if (o.status === "completed") return "completed";
   if (o.status === "dispatched") return "dispatched";
-  return (o.lines || []).every((l) => l.bought) ? "ready" : "sourcing";
+  if (!(o.lines || []).every((l) => l.bought)) return "sourcing";
+  return o.reviewed === false ? "review" : "ready";
 };
 
 const csvCell = (v) => { const s = String(v ?? ""); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
@@ -237,6 +243,8 @@ function ZenPasabuy({ user, onLogout }) {
   const [storageWarn, setStorageWarn] = useState(false);
   const [online, setOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine);
   const [hashOut, setHashOut] = useState("");
+  const [dTiers, setDTiers] = useState(null);      // unsaved tier edits
+  const [dSourcing, setDSourcing] = useState(null); // unsaved sourcing edits
   const [hashPw, setHashPw] = useState("");
   const backupRef = useRef(null);
   const pagePhotoRef = useRef(null);
@@ -321,6 +329,7 @@ function ZenPasabuy({ user, onLogout }) {
             setOrders(d.orders.map((o) => ({
               ...o,
               status: o.status || (o.paid ? "completed" : "open"),
+              reviewed: o.reviewed != null ? o.reviewed : true,
               lines: (o.lines || []).map((l) => ({ ...l, bought: l.bought != null ? l.bought : true })),
             })));
           }
@@ -351,6 +360,10 @@ function ZenPasabuy({ user, onLogout }) {
     })();
   }, [settings, products, orders, loaded]);
 
+  /* drafts follow the saved settings until the user starts editing */
+  useEffect(() => { setDTiers(settings.tiers.map((t) => ({ ...t }))); }, [settings.tiers]);
+  useEffect(() => { setDSourcing(settings.sourcing.map((x) => ({ ...x }))); }, [settings.sourcing]);
+
   const rate = settings.rateMode === "live" && settings.liveRate ? settings.liveRate : settings.manualRate || 0.385;
   const toYen = (php) => (rate ? php / rate : 0);
 
@@ -366,6 +379,22 @@ function ZenPasabuy({ user, onLogout }) {
     () => (unitJpy > 0 && tier ? computePrice(unitJpy, tier.margin, feePhp(source), rate, settings) : null),
     [unitJpy, tier, source, rate, settings] // eslint-disable-line
   );
+
+  /* choosing a product to restock prefills the form from its most recent purchase */
+  const startRestock = (id) => {
+    setPTarget(String(id));
+    const p = products.find((x) => x.id === Number(id));
+    const lot = latestLot(p);
+    if (lot) {
+      setPStore(lot.store || "");
+      setPQty(String(lot.qty || 1));
+      setPTotalJpy(String(Math.round(lot.totalJpy || 0)));
+    }
+    setPDate(today());
+    setPPhoto(null);
+    const t = settings.tiers.find((x) => x.name === p?.tierName);
+    if (t) setTierId(t.id);
+  };
 
   const attachNewPhoto = async (file) => {
     try { setPPhoto(await resizePhoto(file)); ping("Photo attached"); }
@@ -434,12 +463,10 @@ function ZenPasabuy({ user, onLogout }) {
       const uj = allocs.reduce((a, x) => a + x.unitJpy * x.qty, 0) / q;
       line = { id: Date.now(), productId: lineProduct.id, name: lineProduct.name, qty: q, unitJpy: uj, unitCost: cost, sell: sell || lineProduct.list, allocs, bought: true };
     } else {
-      const uj = parseFloat(lineUnitJpy) || 0;
-      if (!lineName.trim() || uj <= 0) return ping("Custom item needs a name and a ¥ cost");
-      const r = computePrice(uj, tier.margin, feePhp(source), rate, settings);
-      line = { id: Date.now(), productId: null, name: lineName.trim(), qty: q, unitJpy: uj, unitCost: r.trueCost, sell: sell || r.list, allocs: null, bought: false, estimated: true };
+      if (!lineName.trim()) return ping("Type what the customer is asking for");
+      line = { id: Date.now(), productId: null, name: lineName.trim(), qty: 1, unitJpy: 0, unitCost: 0, sell: 0, allocs: null, bought: false, estimated: true, request: true };
     }
-    if (line.sell <= 0) return ping("Set a selling price first");
+    if (!line.request && line.sell <= 0) return ping("Set a selling price first");
     setDraft({ ...draft, lines: [...draft.lines, line] });
     remember("products", line.name);
     setLineQty("1"); setLineSell(lineProduct ? String(lineProduct.list) : ""); setLineName(""); setLineUnitJpy("");
@@ -478,7 +505,7 @@ function ZenPasabuy({ user, onLogout }) {
         names[l.name] = (names[l.name] || 0) + l.qty;
         return { ...l, bought: true, productId: match.id, unitCost: cost, unitJpy: uj, allocs, sell, estimated: false };
       });
-      return touched ? { ...o, lines } : o;
+      return touched ? { ...o, lines, reviewed: false } : o;
     });
     if (!filled) return { products: prodList, orders: orderList, filled: 0, summary: "", repriced: [] };
     const newProducts = prodList.map((p) => ({
@@ -513,7 +540,7 @@ function ZenPasabuy({ user, onLogout }) {
     if (!draft.customer.trim()) return ping("Whose order is this? Add a customer name");
     if (!draft.lines.length) return ping("Add at least one item to the order");
     setProducts((prods) => applyAllocs(prods, draft.lines, -1));
-    setOrders([{ id: Date.now(), ...draft, customer: draft.customer.trim(), status: "open" }, ...orders]);
+    setOrders([{ id: Date.now(), ...draft, customer: draft.customer.trim(), status: "open", reviewed: draft.lines.every((l) => l.bought) }, ...orders]);
     remember("customers", draft.customer);
     remember("locations", draft.location);
     remember("products", ...draft.lines.map((l) => l.name));
@@ -542,6 +569,20 @@ function ZenPasabuy({ user, onLogout }) {
     ping("Item removed");
   };
 
+  const markReviewed = (id) => {
+    setOrders(orders.map((o) => (o.id === id ? { ...o, reviewed: true } : o)));
+    ping("Checked — ready to dispatch 🌸");
+  };
+
+  const setOrderLineQty = (orderId, lineId, value) => {
+    const q = Math.max(1, parseInt(value) || 1);
+    const o = orders.find((x) => x.id === orderId);
+    const l = o?.lines.find((x) => x.id === lineId);
+    if (!l) return;
+    if (Array.isArray(l.allocs)) return ping("Remove this item and add it again to change a stocked quantity");
+    setOrders(orders.map((x) => (x.id === orderId ? { ...x, lines: x.lines.map((y) => (y.id === lineId ? { ...y, qty: q } : y)) } : x)));
+  };
+
   const setLineSellPrice = (orderId, lineId, value) => {
     const v = parseFloat(value);
     if (!(v > 0)) return;
@@ -563,12 +604,10 @@ function ZenPasabuy({ user, onLogout }) {
       line = { id: Date.now(), productId: prod.id, name: prod.name, qty: q, unitJpy: uj, unitCost: cost, sell: sell || prod.list, allocs, bought: true };
       setProducts((prods) => applyAllocs(prods, [line], -1));
     } else {
-      const uj = parseFloat(eJpy) || 0;
-      if (!eName.trim() || uj <= 0) return ping("Custom item needs a name and a ¥ cost");
-      const r = computePrice(uj, tier.margin, feePhp(source), rate, settings);
-      line = { id: Date.now(), productId: null, name: eName.trim(), qty: q, unitJpy: uj, unitCost: r.trueCost, sell: sell || r.list, allocs: null, bought: false, estimated: true };
+      if (!eName.trim()) return ping("Type what the customer is asking for");
+      line = { id: Date.now(), productId: null, name: eName.trim(), qty: 1, unitJpy: 0, unitCost: 0, sell: 0, allocs: null, bought: false, estimated: true, request: true };
     }
-    if (line.sell <= 0) return ping("Set a selling price first");
+    if (!line.request && line.sell <= 0) return ping("Set a selling price first");
     remember("products", line.name);
     setOrders(orders.map((x) => (x.id === orderId ? { ...x, lines: [...x.lines, line] } : x)));
     setEQty("1"); setESell(""); setEName(""); setEJpy(""); setEProdId("custom");
@@ -580,6 +619,7 @@ function ZenPasabuy({ user, onLogout }) {
   const dispatchOrder = (id) => {
     const o = orders.find((x) => x.id === id);
     if (o && !o.lines.every((l) => l.bought) && !window.confirm("Some items aren't marked as bought yet. Dispatch anyway?")) return;
+    if (o && o.reviewed === false && !window.confirm("Prices haven't been checked since stock arrived. Dispatch anyway?")) return;
     setOrders(orders.map((x) => (x.id === id ? { ...x, status: "dispatched" } : x)));
     ping("Order dispatched 🚚");
   };
@@ -646,7 +686,7 @@ function ZenPasabuy({ user, onLogout }) {
   }, [orders]);
 
   const phaseCounts = useMemo(() => {
-    const c = { all: periodOrders.length, sourcing: 0, ready: 0, dispatched: 0, completed: 0 };
+    const c = { all: periodOrders.length, sourcing: 0, review: 0, ready: 0, dispatched: 0, completed: 0 };
     periodOrders.forEach((o) => { c[orderPhase(o)]++; });
     return c;
   }, [orders, period]); // eslint-disable-line
@@ -798,24 +838,60 @@ function ZenPasabuy({ user, onLogout }) {
     window.location.replace(u.toString());
   };
 
-  const updTier = (i, patch) => setSettings({ ...settings, tiers: settings.tiers.map((t, j) => (j === i ? { ...t, ...patch } : t)) });
-  const addTier = () => setSettings({ ...settings, tiers: [...settings.tiers, { id: "t" + Date.now(), name: "New tier", desc: "Describe it", margin: 25 }] });
-  const updSourcing = (i, patch) =>
-    setSettings({ ...settings, sourcing: settings.sourcing.map((x, j) => (j === i ? { ...x, ...patch } : x)) });
-  const addSourcing = () =>
-    setSettings({ ...settings, sourcing: [...settings.sourcing, { id: "s" + Date.now(), name: "New sourcing type", note: "When you use it", feeJpy: 100 }] });
-  const removeSourcing = (i) => {
-    if (settings.sourcing.length <= 1) return ping("Keep at least one sourcing type 🌸");
-    const gone = settings.sourcing[i];
-    setSettings({ ...settings, sourcing: settings.sourcing.filter((_, j) => j !== i) });
-    if (sourceId === gone.id) setSourceId(settings.sourcing.find((_, j) => j !== i)?.id);
+  /* ── tiers & sourcing are edited as drafts, then saved ── */
+  const tiersDirty = !!dTiers && JSON.stringify(dTiers) !== JSON.stringify(settings.tiers);
+  const sourcingDirty = !!dSourcing && JSON.stringify(dSourcing) !== JSON.stringify(settings.sourcing);
+
+  const updTier = (i, patch) => setDTiers((d) => d.map((t, j) => (j === i ? { ...t, ...patch } : t)));
+  const addTier = () => setDTiers((d) => [...d, { id: "t" + Date.now(), name: "New tier", desc: "Describe it", margin: 25 }]);
+  const removeTier = (i) => {
+    if (dTiers.length <= 1) return ping("Keep at least one tier 🌸");
+    setDTiers((d) => d.filter((_, j) => j !== i));
   };
 
-  const removeTier = (i) => {
-    if (settings.tiers.length <= 1) return ping("Keep at least one tier 🌸");
-    const gone = settings.tiers[i];
-    setSettings({ ...settings, tiers: settings.tiers.filter((_, j) => j !== i) });
-    if (tierId === gone.id) setTierId(settings.tiers.find((_, j) => j !== i)?.id);
+  const updSourcing = (i, patch) => setDSourcing((d) => d.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+  const addSourcing = () => setDSourcing((d) => [...d, { id: "s" + Date.now(), name: "New sourcing type", note: "When you use it", feeJpy: 100 }]);
+  const removeSourcing = (i) => {
+    if (dSourcing.length <= 1) return ping("Keep at least one sourcing type 🌸");
+    setDSourcing((d) => d.filter((_, j) => j !== i));
+  };
+
+  /* keep a rolling history of the settings that were in use before each save */
+  const snapshotOf = (st) => ({ tiers: st.tiers, sourcing: st.sourcing, buffer: st.buffer, negotiation: st.negotiation });
+  const withHistory = (st, label) => {
+    const prev = { id: Date.now(), at: new Date().toISOString(), label, ...snapshotOf(st) };
+    const hist = [prev, ...(st.history || [])]
+      .filter((h, i, arr) => i === 0 || JSON.stringify(snapshotOf(h)) !== JSON.stringify(snapshotOf(arr[i - 1])))
+      .slice(0, 12);
+    return hist;
+  };
+
+  const saveTiers = () => {
+    const history = withHistory(settings, "before tier change");
+    setSettings({ ...settings, tiers: dTiers, history });
+    if (!dTiers.some((t) => t.id === tierId)) setTierId(dTiers[0]?.id);
+    ping("Tiers saved 🌸");
+  };
+  const saveSourcing = () => {
+    const history = withHistory(settings, "before fee change");
+    setSettings({ ...settings, sourcing: dSourcing, history });
+    if (!dSourcing.some((x) => x.id === sourceId)) setSourceId(dSourcing[0]?.id);
+    ping("Sourcing fees saved 🌸");
+  };
+  const discardTiers = () => { setDTiers(settings.tiers.map((t) => ({ ...t }))); ping("Tier changes discarded"); };
+  const discardSourcing = () => { setDSourcing(settings.sourcing.map((x) => ({ ...x }))); ping("Fee changes discarded"); };
+
+  const saveAsDefault = () => {
+    if (tiersDirty || sourcingDirty) return ping("Save your changes first, then set them as default");
+    setSettings({ ...settings, defaults: snapshotOf(settings) });
+    ping("Saved as your default setup 🌸");
+  };
+  const applySnapshot = (snap, msg) => {
+    const history = withHistory(settings, "before restore");
+    setSettings({ ...settings, tiers: snap.tiers, sourcing: snap.sourcing, buffer: snap.buffer ?? settings.buffer, negotiation: snap.negotiation ?? settings.negotiation, history });
+    if (!snap.tiers.some((t) => t.id === tierId)) setTierId(snap.tiers[0]?.id);
+    if (!snap.sourcing.some((x) => x.id === sourceId)) setSourceId(snap.sourcing[0]?.id);
+    ping(msg);
   };
 
   /* ── styles ── */
@@ -939,12 +1015,48 @@ function ZenPasabuy({ user, onLogout }) {
           <div style={{ display: "grid", gap: 14 }}>
             <div style={card}>
               <span style={label}>What are you logging?</span>
-              <select value={pTarget} onChange={(e) => setPTarget(e.target.value)} style={{ ...inputStyle, fontSize: 14 }}>
+              <select value={pTarget} onChange={(e) => {
+                const v = e.target.value;
+                if (v === "new") { setPTarget("new"); setPName(""); setPStore(""); setPTotalJpy(""); setPQty("1"); setPDate(today()); setPPhoto(null); }
+                else startRestock(v);
+              }} style={{ ...inputStyle, fontSize: 14 }}>
                 <option value="new">✨ A new product</option>
                 {products.map((p) => (
                   <option key={p.id} value={p.id}>↻ Restock: {p.name} ({productStock(p)} left)</option>
                 ))}
               </select>
+              {restockProduct && (() => {
+                const lot = latestLot(restockProduct);
+                const changed = [];
+                if (lot) {
+                  if ((pStore || "") !== (lot.store || "")) changed.push("shop");
+                  if (Math.round(parseFloat(pTotalJpy) || 0) !== Math.round(lot.totalJpy || 0)) changed.push("price");
+                  if ((parseInt(pQty) || 0) !== (lot.qty || 0)) changed.push("quantity");
+                }
+                return (
+                  <div style={{ marginTop: 10, padding: 12, borderRadius: 14, background: T.soft, border: `1px solid ${T.border}` }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                      <Thumb p={restockProduct} size={42} />
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontWeight: 700, fontSize: 13.5 }}>{restockProduct.name}</div>
+                        <div style={{ fontSize: 11, color: T.muted }}>
+                          {productStock(restockProduct)} in stock · sells at {peso(restockProduct.list)}
+                        </div>
+                      </div>
+                    </div>
+                    {lot && (
+                      <div style={{ fontSize: 11.5, color: T.muted, marginTop: 8 }}>
+                        Filled in from your last purchase on <b>{lot.date}</b>: {lot.store || "no shop"} · {yen(lot.totalJpy)} for {lot.qty} pc(s) ({yen(lot.unitJpy)}/pc).
+                        Check the fields below and change anything that's different this time.
+                      </div>
+                    )}
+                    <div style={{ fontSize: 11.5, marginTop: 6, fontWeight: 700, color: changed.length ? T.accent : T.muted }}>
+                      {changed.length ? `Changed this time: ${changed.join(", ")}` : "Same as last time — edit below if that's not right."}
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
                 {!restockProduct && (
                   <input value={pName} onChange={(e) => setPName(e.target.value)} placeholder="Product name (e.g., Tokyo Banana 8pc)" list="zp-products" style={inputStyle} />
@@ -1092,8 +1204,33 @@ function ZenPasabuy({ user, onLogout }) {
                   })()}
                 </div>
 
+                {restockProduct && (
+                  <div style={{ ...card, borderLeft: `4px solid ${T.accent}` }}>
+                    <span style={{ ...label, fontSize: 9.5 }}>Check before restocking</span>
+                    {[
+                      ["Product", restockProduct.name],
+                      ["Shop", pStore.trim() || "—"],
+                      ["Date bought", pDate || today()],
+                      ["Buying", `${qtyNum} pc(s) for ${yen(totalJpyNum)}${qtyNum > 1 ? ` · ${yen(unitJpy)}/pc` : ""}`],
+                      ["Cost per piece", `${peso(result.trueCost)} · ${tier.name} · ${source.name}`],
+                      ["Selling price", `${peso(result.list)}${Math.round(result.list) !== Math.round(restockProduct.list) ? ` (was ${peso(restockProduct.list)})` : ""}`],
+                      ["Stock after", `${productStock(restockProduct) + qtyNum} pc(s)`],
+                    ].map(([k, v]) => (
+                      <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "5px 0", fontSize: 12.5, borderBottom: `1px solid ${T.border}` }}>
+                        <span style={{ color: T.muted }}>{k}</span>
+                        <b style={{ textAlign: "right" }}>{v}</b>
+                      </div>
+                    ))}
+                    {Math.round(result.list) !== Math.round(restockProduct.list) && (
+                      <div style={{ fontSize: 11.5, color: T.accent, fontWeight: 700, marginTop: 8 }}>
+                        Saving updates this product's selling price to {peso(result.list)}. Older batches keep the cost they were bought at.
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <button onClick={saveProduct} style={primaryBtn}>
-                  {restockProduct ? `Add ${qtyNum} pc(s) to ${restockProduct.name}` : `Save product · ${qtyNum} pc(s) in stock`}
+                  {restockProduct ? `Confirm restock · +${qtyNum} pc(s) of ${restockProduct.name}` : `Save product · ${qtyNum} pc(s) in stock`}
                 </button>
               </>
             ) : (
@@ -1174,7 +1311,7 @@ function ZenPasabuy({ user, onLogout }) {
                     <b style={{ color: l.remaining ? T.good : T.pink, flexShrink: 0 }}>{l.remaining}/{l.qty} left</b>
                   </div>
                 ))}
-                <button onClick={() => { setPTarget(String(pageProduct.id)); setTab("price"); }} style={{ ...dashedBtn, width: "100%", marginTop: 10 }}>↻ Restock this product</button>
+                <button onClick={() => { startRestock(pageProduct.id); setTab("price"); }} style={{ ...dashedBtn, width: "100%", marginTop: 10 }}>↻ Restock this product</button>
               </div>
 
               <div style={card}>
@@ -1338,6 +1475,7 @@ function ZenPasabuy({ user, onLogout }) {
               {[
                 ["all", "All", T.primary],
                 ["sourcing", "Sourcing", PHASE.sourcing.color],
+                ["review", "Check prices", PHASE.review.color],
                 ["ready", "Ready", PHASE.ready.color],
                 ["dispatched", "Dispatched", PHASE.dispatched.color],
                 ["completed", "Completed", PHASE.completed.color],
@@ -1358,7 +1496,7 @@ function ZenPasabuy({ user, onLogout }) {
                   </div>
                 ))}
                 <div style={{ fontSize: 11, color: T.muted, marginTop: 8 }}>
-                  Log these in <b>Price it</b> with the same product name and the matching orders fill themselves — stock is deducted and the items flip to ✓ Bought automatically.
+                  Log these in <b>Price it</b> using the same name and the matching orders fill themselves — stock is deducted, prices are set, and the order turns amber so you can check it before dispatch.
                 </div>
               </div>
             )}
@@ -1409,44 +1547,27 @@ function ZenPasabuy({ user, onLogout }) {
                   {lineProdId === "custom" && (
                     <>
                       <div style={{ display: "grid", gridTemplateColumns: "1.3fr 0.7fr", gap: 8, marginTop: 8 }}>
-                        <input value={lineName} onChange={(e) => setLineName(e.target.value)} placeholder="Item name" list="zp-products" style={{ ...inputStyle, fontSize: 14 }} />
-                        <input type="number" inputMode="decimal" value={lineUnitJpy} onChange={(e) => setLineUnitJpy(e.target.value)} placeholder="¥ cost/pc" style={{ ...inputStyle, fontSize: 14 }} />
+                        <input value={lineName} onChange={(e) => setLineName(e.target.value)} placeholder="What are they asking for?" list="zp-products" style={{ ...inputStyle, fontSize: 14 }} />
+                        <input disabled value="" placeholder="¥ cost/pc" style={{ ...inputStyle, fontSize: 14, opacity: 0.5, cursor: "not-allowed" }} />
                       </div>
-                      {(() => {
-                        const uj = parseFloat(lineUnitJpy) || 0;
-                        if (uj <= 0) return (
-                          <div style={{ fontSize: 11, color: T.muted, marginTop: 6 }}>
-                            Estimated ¥ cost is fine — mark it Bought later once you actually have it.
-                          </div>
-                        );
-                        const r = computePrice(uj, tier.margin, feePhp(source), rate, settings);
-                        return (
-                          <div style={{ fontSize: 11.5, color: T.muted, marginTop: 6 }}>
-                            <b style={{ color: T.primary }}>Cost/pc {yen(toYen(r.trueCost))} · {peso(r.trueCost)}</b>
-                            {" "}(incl. buffer {settings.buffer}% + {source.name} {yen(source.feeJpy)}) · suggested sell {peso(r.list)}
-                          </div>
-                        );
-                      })()}
+                      <div style={{ fontSize: 11.5, color: T.muted, marginTop: 6 }}>
+                        Just the name is enough. Quantity, cost and price fill in automatically once you buy it and log it in <b>Price it</b>.
+                      </div>
                     </>
                   )}
                   <div style={{ display: "grid", gridTemplateColumns: "0.6fr 1fr 0.9fr", gap: 8, marginTop: 8, alignItems: "end" }}>
                     <div>
                       <span style={{ ...label, fontSize: 9.5, marginBottom: 3 }}>Qty</span>
-                      <input type="number" inputMode="numeric" min="1" value={lineQty} onChange={(e) => setLineQty(e.target.value)} style={{ ...inputStyle, textAlign: "center", fontSize: 14 }} />
+                      <input type="number" inputMode="numeric" min="1" disabled={!lineProduct} value={lineProduct ? lineQty : ""} onChange={(e) => setLineQty(e.target.value)} style={{ ...inputStyle, textAlign: "center", fontSize: 14, opacity: lineProduct ? 1 : 0.5, cursor: lineProduct ? "text" : "not-allowed" }} />
                     </div>
                     <div>
                       <span style={{ ...label, fontSize: 9.5, marginBottom: 3 }}>Sell each (₱)</span>
-                      <input type="number" inputMode="decimal" value={lineSell} onChange={(e) => setLineSell(e.target.value)} placeholder={lineProduct ? String(lineProduct.list) : "₱"} style={{ ...inputStyle, fontSize: 14 }} />
+                      <input type="number" inputMode="decimal" disabled={!lineProduct} value={lineProduct ? lineSell : ""} onChange={(e) => setLineSell(e.target.value)} placeholder={lineProduct ? String(lineProduct.list) : "set later"} style={{ ...inputStyle, fontSize: 14, opacity: lineProduct ? 1 : 0.5, cursor: lineProduct ? "text" : "not-allowed" }} />
                     </div>
-                    <button onClick={addLine} style={{ ...primaryBtn, padding: 11, fontSize: 13.5 }}>Add item</button>
+                    <button onClick={addLine} style={{ ...primaryBtn, padding: 11, fontSize: 13.5 }}>{lineProduct ? "Add item" : "Add request"}</button>
                   </div>
                   {(() => {
-                    let sug = null;
-                    if (lineProduct) sug = priceSuggestions(lineProduct.floor, lineProduct.list);
-                    else {
-                      const uj = parseFloat(lineUnitJpy) || 0;
-                      if (uj > 0) { const r = computePrice(uj, tier.margin, feePhp(source), rate, settings); sug = priceSuggestions(r.floor, r.list); }
-                    }
+                    const sug = lineProduct ? priceSuggestions(lineProduct.floor, lineProduct.list) : null;
                     if (!sug) return null;
                     return (
                       <div style={{ marginTop: 8 }}>
@@ -1486,9 +1607,13 @@ function ZenPasabuy({ user, onLogout }) {
                                 {l.bought ? "IN HAND" : "TO BUY"}
                               </span>
                             </div>
-                            <div style={{ fontSize: 11, color: T.muted }}>
-                              sell {yen(toYen(l.sell))} ({peso(l.sell)}) each · profit <span style={{ color: m.profit < 0 ? DANGER : T.good, fontWeight: 700 }}>{signedPeso(m.profit)} ({pct(m.margin)})</span>
-                            </div>
+                            {l.request ? (
+                              <div style={{ fontSize: 11, color: T.muted }}>price and quantity set when you buy it</div>
+                            ) : (
+                              <div style={{ fontSize: 11, color: T.muted }}>
+                                sell {yen(toYen(l.sell))} ({peso(l.sell)}) each · profit <span style={{ color: m.profit < 0 ? DANGER : T.good, fontWeight: 700 }}>{signedPeso(m.profit)} ({pct(m.margin)})</span>
+                              </div>
+                            )}
                           </div>
                           <button onClick={() => setDraft({ ...draft, lines: draft.lines.filter((x) => x.id !== l.id) })} style={{ border: "none", background: "transparent", color: T.pink, fontSize: 15, cursor: "pointer" }}>✕</button>
                         </div>
@@ -1547,6 +1672,18 @@ function ZenPasabuy({ user, onLogout }) {
                     </div>
                   </div>
 
+                  {phase === "review" && (
+                    <div style={{ marginTop: 8, padding: "9px 11px", borderRadius: 10, background: "rgba(217,154,43,0.12)", border: `1px solid ${PHASE.review.color}`, fontSize: 11.5 }}>
+                      <b style={{ color: PHASE.review.color }}>Everything's bought 🌸</b>
+                      <div style={{ color: T.muted, marginTop: 2 }}>
+                        Prices were filled in from your inventory. Open the order, check the quantities and prices, then confirm it's ready to dispatch.
+                      </div>
+                      <button onClick={() => markReviewed(o.id)} style={{ ...primaryBtn, width: "100%", marginTop: 8, padding: 9, fontSize: 12.5, background: PHASE.review.color }}>
+                        ✓ Prices checked — ready to dispatch
+                      </button>
+                    </div>
+                  )}
+
                   {m.profit < 0 && (
                     <div style={{ marginTop: 8, padding: "7px 10px", borderRadius: 10, background: "rgba(214,69,69,0.10)", border: `1px solid ${DANGER}`, color: DANGER, fontSize: 11.5, fontWeight: 700 }}>
                       ⚠️ This order loses {peso(Math.abs(m.profit))} — open it and raise the selling prices.
@@ -1562,10 +1699,10 @@ function ZenPasabuy({ user, onLogout }) {
                           <div key={l.id} style={{ padding: "7px 0", borderBottom: `1px solid ${T.border}`, fontSize: 12.5 }}>
                             <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
                               <b>
-                                {l.name} × {l.qty}
+                                {l.name}{l.bought || !l.request ? ` × ${l.qty}` : ""}
                                 {!l.bought && (
                                   <span style={{ marginLeft: 6, fontSize: 9.5, fontWeight: 700, color: PHASE.sourcing.color, border: `1px solid ${PHASE.sourcing.color}`, borderRadius: 999, padding: "1px 6px" }}>
-                                    NEEDS STOCK
+                                    {l.request ? "REQUESTED" : "NEEDS STOCK"}
                                   </span>
                                 )}
                               </b>
@@ -1579,9 +1716,15 @@ function ZenPasabuy({ user, onLogout }) {
                                 <span style={{ color: T.good, fontWeight: 700, fontSize: 11 }}>✓</span>
                               )}
                             </div>
-                            <div style={{ color: T.muted, fontSize: 11.5, marginTop: 2 }}>
-                              cost {yen(toYen(l.unitCost))} ({peso(l.unitCost)})/pc → sell {yen(toYen(l.sell))} ({peso(l.sell)})/pc · profit <span style={{ color: lm.profit < 0 ? DANGER : T.good, fontWeight: 700 }}>{signedPeso(lm.profit)} ({pct(lm.margin)})</span>
-                            </div>
+                            {!l.bought && l.request ? (
+                              <div style={{ color: T.muted, fontSize: 11.5, marginTop: 2 }}>
+                                Waiting to be bought — price and quantity fill in from inventory.
+                              </div>
+                            ) : (
+                              <div style={{ color: T.muted, fontSize: 11.5, marginTop: 2 }}>
+                                cost {yen(toYen(l.unitCost))} ({peso(l.unitCost)})/pc → sell {yen(toYen(l.sell))} ({peso(l.sell)})/pc · profit <span style={{ color: lm.profit < 0 ? DANGER : T.good, fontWeight: 700 }}>{signedPeso(lm.profit)} ({pct(lm.margin)})</span>
+                              </div>
+                            )}
                             {Array.isArray(l.allocs) && l.allocs.length > 0 && (
                               <div style={{ color: T.muted, fontSize: 11 }}>
                                 from batch: {l.allocs.map((a) => `${a.qty} pc (${a.date}${a.store ? " · " + a.store : ""})`).join(", ")}
@@ -1590,6 +1733,13 @@ function ZenPasabuy({ user, onLogout }) {
                             {lm.profit < 0 && (
                               <div style={{ color: DANGER, fontSize: 11, fontWeight: 700, marginTop: 2 }}>
                                 ⚠️ Selling below cost — raise the price by at least {peso(Math.abs(lm.profit) / l.qty)} per piece.
+                              </div>
+                            )}
+                            {editOrderId === o.id && !Array.isArray(l.allocs) && (
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+                                <span style={{ fontSize: 11, color: T.muted, fontWeight: 700 }}>Qty</span>
+                                <input type="number" inputMode="numeric" min="1" defaultValue={l.qty} onBlur={(e) => setOrderLineQty(o.id, l.id, e.target.value)}
+                                  style={{ ...inputStyle, width: 72, padding: "6px 10px", fontSize: 13, textAlign: "center" }} />
                               </div>
                             )}
                             {editOrderId === o.id && (
@@ -1631,30 +1781,34 @@ function ZenPasabuy({ user, onLogout }) {
                             })}
                           </select>
                           {eProdId === "custom" && (
-                            <div style={{ display: "grid", gridTemplateColumns: "1.3fr 0.7fr", gap: 8, marginTop: 8 }}>
-                              <input value={eName} onChange={(e) => setEName(e.target.value)} placeholder="Item name" list="zp-products" style={{ ...inputStyle, fontSize: 14 }} />
-                              <input type="number" inputMode="decimal" value={eJpy} onChange={(e) => setEJpy(e.target.value)} placeholder="¥ cost/pc" style={{ ...inputStyle, fontSize: 14 }} />
-                            </div>
+                            <>
+                              <div style={{ display: "grid", gridTemplateColumns: "1.3fr 0.7fr", gap: 8, marginTop: 8 }}>
+                                <input value={eName} onChange={(e) => setEName(e.target.value)} placeholder="What are they asking for?" list="zp-products" style={{ ...inputStyle, fontSize: 14 }} />
+                                <input disabled value="" placeholder="¥ cost/pc" style={{ ...inputStyle, fontSize: 14, opacity: 0.5, cursor: "not-allowed" }} />
+                              </div>
+                              <div style={{ fontSize: 11.5, color: T.muted, marginTop: 6 }}>
+                                Just the name is enough — the rest fills in when you log it in Price it.
+                              </div>
+                            </>
                           )}
                           <div style={{ display: "grid", gridTemplateColumns: "0.6fr 1fr 0.9fr", gap: 8, marginTop: 8, alignItems: "end" }}>
-                            <div>
-                              <span style={{ ...label, fontSize: 9.5, marginBottom: 3 }}>Qty</span>
-                              <input type="number" inputMode="numeric" min="1" value={eQty} onChange={(e) => setEQty(e.target.value)} style={{ ...inputStyle, textAlign: "center", fontSize: 14 }} />
-                            </div>
-                            <div>
-                              <span style={{ ...label, fontSize: 9.5, marginBottom: 3 }}>Sell each (₱)</span>
-                              <input type="number" inputMode="decimal" value={eSell} onChange={(e) => setESell(e.target.value)} placeholder="₱" style={{ ...inputStyle, fontSize: 14 }} />
-                            </div>
-                            <button onClick={() => addLineToOrder(o.id)} style={{ ...primaryBtn, padding: 11, fontSize: 13.5 }}>Add</button>
+                            {(() => { const ep = products.find((x) => x.id === Number(eProdId)); return (
+                              <>
+                                <div>
+                                  <span style={{ ...label, fontSize: 9.5, marginBottom: 3 }}>Qty</span>
+                                  <input type="number" inputMode="numeric" min="1" disabled={!ep} value={ep ? eQty : ""} onChange={(e) => setEQty(e.target.value)} style={{ ...inputStyle, textAlign: "center", fontSize: 14, opacity: ep ? 1 : 0.5, cursor: ep ? "text" : "not-allowed" }} />
+                                </div>
+                                <div>
+                                  <span style={{ ...label, fontSize: 9.5, marginBottom: 3 }}>Sell each (₱)</span>
+                                  <input type="number" inputMode="decimal" disabled={!ep} value={ep ? eSell : ""} onChange={(e) => setESell(e.target.value)} placeholder={ep ? "₱" : "set later"} style={{ ...inputStyle, fontSize: 14, opacity: ep ? 1 : 0.5, cursor: ep ? "text" : "not-allowed" }} />
+                                </div>
+                                <button onClick={() => addLineToOrder(o.id)} style={{ ...primaryBtn, padding: 11, fontSize: 13.5 }}>{ep ? "Add" : "Add request"}</button>
+                              </>
+                            ); })()}
                           </div>
                           {(() => {
                             const p = products.find((x) => x.id === Number(eProdId));
-                            let sug = null;
-                            if (p) sug = priceSuggestions(p.floor, p.list);
-                            else {
-                              const uj = parseFloat(eJpy) || 0;
-                              if (uj > 0) { const r = computePrice(uj, tier.margin, feePhp(source), rate, settings); sug = priceSuggestions(r.floor, r.list); }
-                            }
+                            const sug = p ? priceSuggestions(p.floor, p.list) : null;
                             if (!sug) return null;
                             return (
                               <div style={{ marginTop: 8 }}>
@@ -1685,6 +1839,11 @@ function ZenPasabuy({ user, onLogout }) {
 
                       {/* lifecycle actions */}
                       <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                        {phase === "review" && (
+                          <button onClick={() => markReviewed(o.id)} style={{ ...primaryBtn, flex: 1, padding: 10, fontSize: 13, background: PHASE.review.color }}>
+                            ✓ Prices checked
+                          </button>
+                        )}
                         {(phase === "sourcing" || phase === "ready") && (
                           <button onClick={() => dispatchOrder(o.id)} style={{ ...primaryBtn, flex: 1, padding: 10, fontSize: 13, background: PHASE.dispatched.color }}>
                             Mark dispatched 🚚
@@ -1755,8 +1914,8 @@ function ZenPasabuy({ user, onLogout }) {
             </div>
 
             <div style={card}>
-              <span style={label}>Your tiers</span>
-              {settings.tiers.map((t, i) => (
+              <span style={label}>Your tiers{tiersDirty ? " · unsaved" : ""}</span>
+              {(dTiers || []).map((t, i) => (
                 <div key={t.id} style={{ border: `1px solid ${T.border}`, borderRadius: 14, padding: 12, marginTop: i ? 10 : 4, background: T.soft }}>
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                     <input value={t.name} onChange={(e) => updTier(i, { name: e.target.value })} placeholder="Tier name" style={{ ...inputStyle, flex: 1, padding: "9px 12px", fontSize: 14 }} />
@@ -1770,11 +1929,20 @@ function ZenPasabuy({ user, onLogout }) {
                 </div>
               ))}
               <button onClick={addTier} style={{ ...dashedBtn, width: "100%", marginTop: 10 }}>+ Add a tier</button>
+              {tiersDirty && (
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <button onClick={saveTiers} style={{ ...primaryBtn, flex: 1, padding: 11, fontSize: 14 }}>Save changes</button>
+                  <button onClick={discardTiers} style={{ ...ghostBtn, color: T.muted }}>Discard</button>
+                </div>
+              )}
+              <div style={{ fontSize: 11, color: T.muted, marginTop: 8 }}>
+                {tiersDirty ? "Your calculator keeps using the saved tiers until you press Save changes." : "Changes take effect once you save them."}
+              </div>
             </div>
 
             <div style={card}>
-              <span style={label}>Logistics & effort fees (¥ per item)</span>
-              {settings.sourcing.map((sc, i) => (
+              <span style={label}>Logistics & effort fees (¥ per item){sourcingDirty ? " · unsaved" : ""}</span>
+              {(dSourcing || []).map((sc, i) => (
                 <div key={sc.id} style={{ border: `1px solid ${T.border}`, borderRadius: 14, padding: 12, marginTop: i ? 10 : 4, background: T.soft }}>
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                     <input value={sc.name} onChange={(e) => updSourcing(i, { name: e.target.value })} placeholder="Sourcing type" style={{ ...inputStyle, flex: 1, padding: "9px 12px", fontSize: 14 }} />
@@ -1789,8 +1957,64 @@ function ZenPasabuy({ user, onLogout }) {
                 </div>
               ))}
               <button onClick={addSourcing} style={{ ...dashedBtn, width: "100%", marginTop: 10 }}>+ Add a sourcing type</button>
+              {sourcingDirty && (
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <button onClick={saveSourcing} style={{ ...primaryBtn, flex: 1, padding: 11, fontSize: 14 }}>Save changes</button>
+                  <button onClick={discardSourcing} style={{ ...ghostBtn, color: T.muted }}>Discard</button>
+                </div>
+              )}
               <div style={{ fontSize: 11, color: T.muted, marginTop: 10 }}>
                 Tip: total your train fare for the day in ¥, divide by the items you expect to source, and set that as your bigger-trip fee.
+              </div>
+            </div>
+
+            {/* defaults + history */}
+            <div style={card}>
+              <span style={label}>Default setup & history</span>
+              <div style={{ fontSize: 12.5, color: T.muted }}>
+                Keep a setup you trust as your default, and roll back to any setup you used before.
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                <button onClick={saveAsDefault} style={{ ...ghostBtn, flex: 1, color: T.accent }}>★ Save current as default</button>
+                {settings.defaults && (
+                  <button onClick={() => applySnapshot(settings.defaults, "Your default setup restored 🌸")} style={{ ...ghostBtn, flex: 1, color: T.accent }}>
+                    ↺ Restore my default
+                  </button>
+                )}
+              </div>
+              {settings.defaults && (
+                <div style={{ fontSize: 11, color: T.muted, marginTop: 6 }}>
+                  Default: {settings.defaults.tiers.length} tier(s) · {settings.defaults.sourcing.length} sourcing type(s) · buffer {settings.defaults.buffer}% · haggle {settings.defaults.negotiation}%
+                </div>
+              )}
+
+              <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${T.border}` }}>
+                <span style={{ ...label, fontSize: 9.5 }}>Previous setups</span>
+                {(settings.history || []).length === 0 ? (
+                  <div style={{ fontSize: 12, color: T.muted }}>Nothing yet — every time you save a change, the setup you were using is kept here.</div>
+                ) : (
+                  (settings.history || []).map((h) => (
+                    <div key={h.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: `1px solid ${T.border}`, fontSize: 12 }}>
+                      <div style={{ minWidth: 0 }}>
+                        <b>{new Date(h.at).toLocaleString("en-PH", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</b>
+                        <div style={{ color: T.muted, fontSize: 11 }}>
+                          {h.tiers.map((t) => `${t.name} ${t.margin}%`).join(" · ")}
+                        </div>
+                        <div style={{ color: T.muted, fontSize: 11 }}>
+                          {h.sourcing.map((x) => `${x.name} ¥${x.feeJpy}`).join(" · ")}
+                        </div>
+                      </div>
+                      <button onClick={() => applySnapshot(h, "Previous setup restored 🌸")} style={{ ...ghostBtn, flexShrink: 0, color: T.accent, padding: "7px 11px", fontSize: 11.5 }}>Restore</button>
+                    </div>
+                  ))
+                )}
+                {(settings.history || []).length > 0 && (
+                  <button
+                    onClick={() => { if (window.confirm("Clear the setup history? Your current settings and default stay.")) { setSettings({ ...settings, history: [] }); ping("History cleared"); } }}
+                    style={{ ...ghostBtn, width: "100%", marginTop: 10, color: T.muted }}>
+                    Clear history
+                  </button>
+                )}
               </div>
             </div>
 
@@ -1815,28 +2039,6 @@ function ZenPasabuy({ user, onLogout }) {
                   </div>
                 </div>
               ))}
-              {[
-                ["primary", "Primary — headers, buttons"],
-                ["accent", "Accent — highlights"],
-                ["pink", "Soft accent — small touches"],
-                ["bg", "Background"],
-                ["bg2", "Background fade"],
-                ["border", "Card borders"],
-                ["ink", "Text"],
-                ["muted", "Muted text"],
-                ["paper", "Cards"],
-                ["soft", "Panels & table stripes"],
-                ["good", "Profit / success green"],
-              ].map(([key, name]) => (
-                <div key={key} style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
-                  <input type="color" value={T[key]} onChange={(e) => setSettings({ ...settings, theme: { ...T, [key]: e.target.value } })} style={{ width: 42, height: 34, border: `1.5px solid ${T.border}`, borderRadius: 10, background: T.paper, padding: 2, cursor: "pointer" }} />
-                  <div style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{name}</div>
-                  <code style={{ fontSize: 11.5, color: T.muted }}>{T[key]}</code>
-                </div>
-              ))}
-              <button onClick={() => { setSettings({ ...settings, theme: { ...SWEETIES_THEME } }); ping("Back to Sweeties colors 🌸"); }} style={{ ...ghostBtn, width: "100%", marginTop: 12, padding: 11, color: T.muted }}>
-                Reset to Sweeties Pawprints colors
-              </button>
             </div>
 
             <div style={card}>
