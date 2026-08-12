@@ -78,8 +78,8 @@ async function sha256Hex(text) {
 const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "7.6.0";
-const APP_UPDATED = "Aug 12, 2026 · 3:08 PM PHT";
+const APP_VERSION = "7.6.1";
+const APP_UPDATED = "Aug 12, 2026 · 3:18 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -179,6 +179,34 @@ const csvCell = (v) => { const s = String(v ?? ""); return /[",\n]/.test(s) ? '"
 /* spreadsheet colours: theme for the chrome, fixed green/red for money */
 const GAIN_HEX = "#2e7d4f";
 const LOSS_HEX = "#c62828";
+const hexToRgb = (hex) => {
+  const h = String(hex || "").replace("#", "").trim();
+  if (h.length !== 6) return null;
+  return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16) };
+};
+const rgbToHex = ({ r, g, b }) => "#" + [r, g, b].map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join("");
+/* relative luminance, 0 = black, 1 = white */
+const lum = (hex) => {
+  const c = hexToRgb(hex);
+  if (!c) return 1;
+  const f = (v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); };
+  return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b);
+};
+/* blend a colour toward white (amt 0..1) — used for readable pale row stripes */
+const tint = (hex, amt) => {
+  const c = hexToRgb(hex);
+  if (!c) return "#f5f5f5";
+  return rgbToHex({ r: c.r + (255 - c.r) * amt, g: c.g + (255 - c.g) * amt, b: c.b + (255 - c.b) * amt });
+};
+/* darken toward black (amt 0..1) */
+const shade = (hex, amt) => {
+  const c = hexToRgb(hex);
+  if (!c) return "#333333";
+  return rgbToHex({ r: c.r * (1 - amt), g: c.g * (1 - amt), b: c.b * (1 - amt) });
+};
+/* spreadsheets are always read on a white page, so text is always dark */
+const SHEET_INK = "#1f2430";
+
 const argb = (hex, fallback = "FF000000") => {
   const h = String(hex || "").replace("#", "").trim();
   return h.length === 6 ? "FF" + h.toUpperCase() : fallback;
@@ -797,11 +825,24 @@ function ZenPasabuy({ user, onLogout }) {
   const MAIN_SYM = () => (showYen ? "¥" : "₱");
   const mv = (php) => Math.round(showYen ? toYen(php) : php);
 
+  /* the workbook borrows the theme's hue but always stays light and readable,
+     because a dark theme's surfaces would make black spreadsheet text invisible */
+  const contrastWithWhite = (hex) => 1.05 / (lum(hex) + 0.05);
+  /* darken the header until white text is comfortably readable on it */
+  const sheetHeaderBg = (() => {
+    let c = T.primary || "#801d5c";
+    let guard = 0;
+    while (contrastWithWhite(c) < 4.5 && guard++ < 12) c = shade(c, 0.12);
+    return c;
+  })();
+  const sheetStripeBg = tint(T.primary, 0.92);
+  const sheetTotalBg = tint(T.primary, 0.82);
+
   const styleSheet = (ws, headerCount) => {
     ws.views = [{ state: "frozen", ySplit: 1 }];
-    ws.getRow(1).height = 22;
+    ws.getRow(1).height = 30;
     ws.getRow(1).eachCell((c) => {
-      c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: argb(T.primary, "FF801D5C") } };
+      c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: argb(sheetHeaderBg, "FF801D5C") } };
       c.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
       c.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
     });
@@ -814,17 +855,22 @@ function ZenPasabuy({ user, onLogout }) {
     if (value < 0) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFDE7E7" } };
   };
 
+  /* every body cell gets dark text and a pale fill, whatever theme is active */
   const stripe = (row, i) => {
-    if (i % 2 === 0) return;
-    row.eachCell((c) => {
-      if (!c.fill) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: argb(T.soft, "FFFBF2F8") } };
+    row.eachCell({ includeEmpty: true }, (c) => {
+      if (!c.font || !c.font.color) c.font = { ...(c.font || {}), color: { argb: argb(SHEET_INK) } };
+      if (!c.fill) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: argb(i % 2 ? sheetStripeBg : "#ffffff", "FFFFFFFF") } };
     });
   };
 
   const totalsRow = (ws, row) => {
-    row.eachCell((c) => {
-      c.font = { ...(c.font || {}), bold: true };
-      c.border = { top: { style: "double", color: { argb: argb(T.primary, "FF801D5C") } } };
+    row.eachCell({ includeEmpty: true }, (c) => {
+      if (!c.font || !c.font.color) c.font = { color: { argb: argb(SHEET_INK) } };
+      c.font = { ...c.font, bold: true };
+      c.fill = c.fill && c.fill.fgColor && c.fill.fgColor.argb === "FFFDE7E7"
+        ? c.fill
+        : { type: "pattern", pattern: "solid", fgColor: { argb: argb(sheetTotalBg, "FFF3E3EE") } };
+      c.border = { top: { style: "double", color: { argb: argb(sheetHeaderBg, "FF801D5C") } } };
     });
   };
 
