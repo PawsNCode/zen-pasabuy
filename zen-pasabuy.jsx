@@ -95,8 +95,8 @@ async function sha256Hex(text) {
 const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "7.8.2";
-const APP_UPDATED = "Aug 12, 2026 · 11:25 PM PHT";
+const APP_VERSION = "7.8.3";
+const APP_UPDATED = "Aug 12, 2026 · 9:15 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
