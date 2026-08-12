@@ -95,8 +95,8 @@ async function sha256Hex(text) {
 const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "7.8.3";
-const APP_UPDATED = "Aug 12, 2026 · 9:15 PM PHT";
+const APP_VERSION = "7.9.0";
+const APP_UPDATED = "Aug 12, 2026 · 9:27 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -1281,7 +1281,9 @@ function ZenPasabuy({ user, onLogout }) {
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Quicksand:wght@500;600;700&display=swap');
         *, *::before, *::after { box-sizing: border-box; }
-        html, body { overflow-x: hidden; }
+        html, body { overflow-x: hidden; overflow-x: clip; }
+        /* the app column: clip sideways overflow without breaking the sticky bar */
+        .zp-shell { overflow-x: hidden; overflow-x: clip; }
         input::placeholder { color: ${T.pink}; font-weight: 500; }
         input:focus, select:focus { border-color: ${T.accent} !important; }
         button:active { transform: scale(.98); }
@@ -1294,7 +1296,7 @@ function ZenPasabuy({ user, onLogout }) {
         @media (prefers-reduced-motion: reduce){ *{transition:none!important} }
       `}</style>
 
-      <div style={{ maxWidth: 560, margin: "0 auto", padding: "22px 16px 60px", overflowX: "hidden" }}>
+      <div className="zp-shell" style={{ maxWidth: 560, margin: "0 auto", padding: "22px 16px 60px" }}>
         <datalist id="zp-shops">{memShops.map((v) => <option key={v} value={v} />)}</datalist>
         <datalist id="zp-locations">{memLocations.map((v) => <option key={v} value={v} />)}</datalist>
         <datalist id="zp-customers">{memCustomers.map((v) => <option key={v} value={v} />)}</datalist>
@@ -1310,22 +1312,33 @@ function ZenPasabuy({ user, onLogout }) {
           </div>
         </header>
 
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-          <div style={{ background: T.paper, border: `1px solid ${T.border}`, borderRadius: 999, padding: "6px 14px", fontSize: 12.5, fontWeight: 700 }}>
-            ¥1 = ₱{Number(rate).toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}
-            <span style={{ color: T.muted, fontWeight: 500 }}> · {settings.rateMode === "live" && settings.liveRate ? `live${rateStamp ? " · " + rateStamp : ""}` : "your rate"}</span>
+        {/* sticky strip — the rate, the currency switch and the tabs stay in reach while scrolling */}
+        <div style={{ position: "sticky", top: 0, zIndex: 30, background: T.bg, margin: "0 -16px 16px", padding: "8px 16px 10px", borderBottom: `1px solid ${T.border}`, boxShadow: "0 6px 16px rgba(0,0,0,0.07)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, marginBottom: 9, flexWrap: "wrap" }}>
+            <div style={{ background: T.paper, border: `1px solid ${T.border}`, borderRadius: 999, padding: "5px 12px", fontSize: 12, fontWeight: 700 }}>
+              ¥1 = ₱{Number(rate).toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}
+              <span style={{ color: T.muted, fontWeight: 500 }}> · {settings.rateMode === "live" && settings.liveRate ? `live${rateStamp ? " · " + rateStamp : ""}` : "your rate"}</span>
+            </div>
+            <button onClick={() => refreshRate(false)} disabled={rateBusy} style={{ ...ghostBtn, padding: "5px 11px", fontSize: 11.5, color: T.accent, borderColor: T.pink }}>
+              {rateBusy ? "fetching…" : "↻ refresh"}
+            </button>
+            <div style={{ display: "flex", background: T.paper, border: `1.5px solid ${T.border}`, borderRadius: 999, overflow: "hidden" }}>
+              {[["jpy", "¥ Yen"], ["php", "₱ Peso"]].map(([v, name]) => (
+                <button key={v} onClick={() => setSettings({ ...settings, displayCcy: v })}
+                  style={{ padding: "5px 12px", border: "none", background: (settings.displayCcy || "jpy") === v ? T.primary : "transparent", color: (settings.displayCcy || "jpy") === v ? "#fff" : T.muted, fontFamily: "'Quicksand', sans-serif", fontWeight: 700, fontSize: 11.5, cursor: "pointer" }}>
+                  {name}
+                </button>
+              ))}
+            </div>
           </div>
-          <button onClick={() => refreshRate(false)} disabled={rateBusy} style={{ ...ghostBtn, padding: "6px 12px", fontSize: 12, color: T.accent, borderColor: T.pink }}>
-            {rateBusy ? "fetching…" : "↻ refresh"}
-          </button>
-          <div style={{ display: "flex", background: T.paper, border: `1.5px solid ${T.border}`, borderRadius: 999, overflow: "hidden" }}>
-            {[["jpy", "¥ Yen"], ["php", "₱ Peso"]].map(([v, name]) => (
-              <button key={v} onClick={() => setSettings({ ...settings, displayCcy: v })}
-                style={{ padding: "6px 12px", border: "none", background: (settings.displayCcy || "jpy") === v ? T.primary : "transparent", color: (settings.displayCcy || "jpy") === v ? "#fff" : T.muted, fontFamily: "'Quicksand', sans-serif", fontWeight: 700, fontSize: 11.5, cursor: "pointer" }}>
-                {name}
+
+          <nav style={{ display: "flex", gap: 6 }}>
+            {tabs.map((t) => (
+              <button key={t.id} onClick={() => { setTab(t.id); if (t.id !== "products") setPageId(null); window.scrollTo({ top: 0, behavior: "smooth" }); }} style={{ flex: 1, padding: "10px 2px", borderRadius: 999, border: `1.5px solid ${tab === t.id ? T.primary : T.border}`, background: tab === t.id ? T.primary : T.paper, color: tab === t.id ? "#fff" : T.ink, fontFamily: "'Quicksand', sans-serif", fontWeight: 700, fontSize: 11.5, cursor: "pointer", transition: "all .15s" }}>
+                {t.label}
               </button>
             ))}
-          </div>
+          </nav>
         </div>
 
         {!online && (
@@ -1352,14 +1365,6 @@ function ZenPasabuy({ user, onLogout }) {
             ⚠️ Saving is struggling — likely too many photos. Export a JSON backup now, then remove a few photos to free space.
           </div>
         )}
-
-        <nav style={{ display: "flex", gap: 6, marginBottom: 18 }}>
-          {tabs.map((t) => (
-            <button key={t.id} onClick={() => { setTab(t.id); if (t.id !== "products") setPageId(null); }} style={{ flex: 1, padding: "10px 2px", borderRadius: 999, border: `1.5px solid ${tab === t.id ? T.primary : T.border}`, background: tab === t.id ? T.primary : T.paper, color: tab === t.id ? "#fff" : T.ink, fontFamily: "'Quicksand', sans-serif", fontWeight: 700, fontSize: 11.5, cursor: "pointer", transition: "all .15s" }}>
-              {t.label}
-            </button>
-          ))}
-        </nav>
 
         {/* ══════════ PRICE IT ══════════ */}
         {tab === "price" && (
