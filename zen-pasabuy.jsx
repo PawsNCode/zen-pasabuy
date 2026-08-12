@@ -78,8 +78,8 @@ async function sha256Hex(text) {
 const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "7.6.1";
-const APP_UPDATED = "Aug 12, 2026 · 3:18 PM PHT";
+const APP_VERSION = "7.7.0";
+const APP_UPDATED = "Aug 12, 2026 · 3:21 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -341,6 +341,7 @@ function ZenPasabuy({ user, onLogout }) {
   const [orderSearch, setOrderSearch] = useState("");
   const [phaseFilter, setPhaseFilter] = useState("all"); // all | sourcing | ready | dispatched | completed
   const [locFilter, setLocFilter] = useState("all");
+  const [ordView, setOrdView] = useState("cards"); // cards | sheet
 
   /* Inventory */
   const [pageId, setPageId] = useState(null);
@@ -1760,6 +1761,20 @@ function ZenPasabuy({ user, onLogout }) {
               <button onClick={exportOrdersXLSX} style={{ ...ghostBtn, color: T.accent }} disabled={!orders.length}>⬇ Excel</button>
             </div>
 
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <div style={{ display: "flex", background: T.paper, border: `1.5px solid ${T.border}`, borderRadius: 999, overflow: "hidden" }}>
+                {[["cards", "Cards"], ["sheet", "Sheet"]].map(([v, name]) => (
+                  <button key={v} onClick={() => setOrdView(v)}
+                    style={{ padding: "8px 16px", border: "none", background: ordView === v ? T.primary : "transparent", color: ordView === v ? "#fff" : T.muted, fontFamily: "'Quicksand', sans-serif", fontWeight: 700, fontSize: 12.5, cursor: "pointer" }}>
+                    {name}
+                  </button>
+                ))}
+              </div>
+              {ordView === "sheet" && (
+                <span style={{ fontSize: 11, color: T.muted }}>one row per item · tap a row to open the order</span>
+              )}
+            </div>
+
             {/* search + phase filter */}
             <input value={orderSearch} onChange={(e) => setOrderSearch(e.target.value)} placeholder="🔍 Search customer, location or product…" style={inputStyle} />
 
@@ -1951,7 +1966,71 @@ function ZenPasabuy({ user, onLogout }) {
             )}
 
             {/* order cards, color-coded by phase */}
-            {visibleOrders.map((o) => {
+            {ordView === "sheet" && visibleOrders.length > 0 && (() => {
+              const rows = [];
+              visibleOrders.forEach((o) => {
+                const ph = PHASE[orderPhase(o)];
+                o.lines.forEach((l) => rows.push({ o, l, ph, m: lineMath(l) }));
+              });
+              const tSpent = rows.reduce((a, r) => a + r.m.spent, 0);
+              const tRev = rows.reduce((a, r) => a + r.m.revenue, 0);
+              const tProfit = tRev - tSpent;
+              const cellH = { padding: "9px 10px", fontFamily: "'Quicksand', sans-serif", fontSize: 10.5, letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap" };
+              const cell = { padding: "8px 10px", whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` };
+              return (
+                <div style={{ ...card, padding: 0, overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+                  <table style={{ borderCollapse: "collapse", fontSize: 12.5, minWidth: 880 }}>
+                    <thead>
+                      <tr style={{ background: T.primary, color: "#fff" }}>
+                        <th style={{ ...cellH, textAlign: "left", position: "sticky", left: 0, background: T.primary, zIndex: 2 }}>Customer</th>
+                        {["Location", "Status", "Ordered", "Arriving", "Product", "Qty", "Cost/pc", "Sell/pc", "Revenue", "Profit", "Margin", "Result"].map((h, k) => (
+                          <th key={h} style={{ ...cellH, textAlign: k >= 5 && k !== 5 ? "right" : "left" }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((r, idx) => {
+                        const bg = idx % 2 ? T.soft : T.paper;
+                        const pc = r.m.profit < 0 ? DANGER : T.good;
+                        const pending = !r.l.bought;
+                        return (
+                          <tr key={`${r.o.id}-${r.l.id}`} onClick={() => { setOrdView("cards"); setOpenOrder(r.o.id); }} style={{ background: bg, cursor: "pointer" }}>
+                            <td style={{ ...cell, fontWeight: 700, position: "sticky", left: 0, background: bg, zIndex: 1 }}>{r.o.customer}</td>
+                            <td style={{ ...cell, color: T.muted }}>{r.o.location || "—"}</td>
+                            <td style={{ ...cell }}>
+                              <span style={{ background: r.ph.color, color: "#fff", borderRadius: 999, padding: "2px 9px", fontSize: 10, fontWeight: 700 }}>{r.ph.label}</span>
+                            </td>
+                            <td style={{ ...cell, color: T.muted }}>{r.o.orderDate}</td>
+                            <td style={{ ...cell, color: T.muted }}>{r.o.eta || "—"}</td>
+                            <td style={{ ...cell }}>
+                              {r.l.name}
+                              {pending && <span style={{ marginLeft: 6, fontSize: 9.5, fontWeight: 700, color: PHASE.sourcing.color }}>{r.l.request ? "REQUESTED" : "NEEDS STOCK"}</span>}
+                            </td>
+                            <td style={{ ...cell, textAlign: "right" }}>{r.l.qty}</td>
+                            <td style={{ ...cell, textAlign: "right" }}>{pending && r.l.request ? "—" : M(r.l.unitCost)}</td>
+                            <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: T.primary }}>{pending && r.l.request ? "—" : M(r.l.sell)}</td>
+                            <td style={{ ...cell, textAlign: "right" }}>{pending && r.l.request ? "—" : M(r.m.revenue)}</td>
+                            <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: pc }}>{pending && r.l.request ? "—" : signedM(r.m.profit)}</td>
+                            <td style={{ ...cell, textAlign: "right", color: pc }}>{pending && r.l.request ? "—" : pct(r.m.margin)}</td>
+                            <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: pc }}>{pending && r.l.request ? "pending" : r.m.profit < 0 ? "LOSS" : "Profit"}</td>
+                          </tr>
+                        );
+                      })}
+                      <tr style={{ background: T.bg, borderTop: `2px solid ${T.primary}` }}>
+                        <td style={{ ...cell, fontWeight: 700, position: "sticky", left: 0, background: T.bg }}>Totals · {visibleOrders.length} order(s)</td>
+                        <td style={cell} colSpan={8} />
+                        <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: T.primary }}>{M(tRev)}</td>
+                        <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: tProfit < 0 ? DANGER : T.good }}>{signedM(tProfit)}</td>
+                        <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: tProfit < 0 ? DANGER : T.good }}>{pct(tSpent > 0 ? (tProfit / tSpent) * 100 : NaN)}</td>
+                        <td style={cell} />
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
+
+            {ordView === "cards" && visibleOrders.map((o) => {
               const m = orderMath(o);
               const phase = orderPhase(o);
               const ph = PHASE[phase];
