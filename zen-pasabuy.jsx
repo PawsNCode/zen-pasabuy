@@ -95,8 +95,8 @@ async function sha256Hex(text) {
 const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "7.9.0";
-const APP_UPDATED = "Aug 12, 2026 · 9:27 PM PHT";
+const APP_VERSION = "7.9.1";
+const APP_UPDATED = "Aug 12, 2026 · 9:36 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -2300,14 +2300,14 @@ function ZenPasabuy({ user, onLogout }) {
                             {editOrderId === o.id && !Array.isArray(l.allocs) && (
                               <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
                                 <span style={{ fontSize: 11, color: T.muted, fontWeight: 700 }}>Qty</span>
-                                <input type="number" inputMode="numeric" min="1" defaultValue={l.qty} onBlur={(e) => setOrderLineQty(o.id, l.id, e.target.value)}
+                                <input key={`q-${l.id}-${l.qty}`} type="number" inputMode="numeric" min="1" defaultValue={l.qty} onBlur={(e) => setOrderLineQty(o.id, l.id, e.target.value)}
                                   style={{ ...inputStyle, width: 72, padding: "6px 10px", fontSize: 13, textAlign: "center" }} />
                               </div>
                             )}
                             {editOrderId === o.id && (
                               <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
                                 <span style={{ fontSize: 11, color: T.muted, fontWeight: 700 }}>Sell each ₱</span>
-                                <input type="number" inputMode="decimal" defaultValue={Math.round(l.sell)} onBlur={(e) => setLineSellPrice(o.id, l.id, e.target.value)}
+                                <input key={`s-${l.id}-${Math.round(l.sell)}`} type="number" inputMode="decimal" defaultValue={Math.round(l.sell)} onBlur={(e) => setLineSellPrice(o.id, l.id, e.target.value)}
                                   style={{ ...inputStyle, width: 96, padding: "6px 10px", fontSize: 13 }} />
                                 {(() => {
                                   const p = products.find((x) => x.id === l.productId);
@@ -2319,6 +2319,9 @@ function ZenPasabuy({ user, onLogout }) {
                                     </button>
                                   ));
                                 })()}
+                                <div style={{ width: "100%", fontSize: 10.5, color: T.muted, marginTop: 2 }}>
+                                  = <b style={{ color: T.primary }}>{M(l.sell)}</b> · {M2(l.sell)} each{l.qty > 1 ? ` · ${M(l.sell * l.qty)} for ${l.qty} pc(s)` : ""}
+                                </div>
                               </div>
                             )}
                           </div>
