@@ -51,6 +51,7 @@ const DEFAULT_SETTINGS = {
     { id: "hunt", name: "Multi-store hunt", feeJpy: 830, note: "Full-day hunting" },
   ],
   theme: { ...SWEETIES_THEME },
+  displayCcy: "jpy", // "jpy" (default) or "php" — which currency leads everywhere
   memory: { shops: [], locations: [], customers: [], products: [] },
 };
 
@@ -77,8 +78,8 @@ async function sha256Hex(text) {
 const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "7.5.0";
-const APP_UPDATED = "Aug 12, 2026 · 2:59 PM PHT";
+const APP_VERSION = "7.6.0";
+const APP_UPDATED = "Aug 12, 2026 · 3:08 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -397,6 +398,11 @@ function ZenPasabuy({ user, onLogout }) {
 
   const rate = settings.rateMode === "live" && settings.liveRate ? settings.liveRate : settings.manualRate || 0.385;
   const toYen = (php) => (rate ? php / rate : 0);
+  /* M = the currency the user chose to lead with, M2 = the other one */
+  const showYen = (settings.displayCcy || "jpy") === "jpy";
+  const M = (php) => (showYen ? yen(toYen(php)) : peso(php));
+  const M2 = (php) => (showYen ? peso(php) : yen(toYen(php)));
+  const signedM = (php) => (php < 0 ? "−" : "+") + M(Math.abs(php)).replace(/^[−+]/, "");
 
   const tier = settings.tiers.find((t) => t.id === tierId) || settings.tiers[0];
   const source = settings.sourcing.find((s) => s.id === sourceId) || settings.sourcing[0];
@@ -786,6 +792,10 @@ function ZenPasabuy({ user, onLogout }) {
   /* ── spreadsheet exports (.xlsx, themed, with green gains and red losses) ── */
   const PESO_FMT = '"₱"#,##0';
   const YEN_FMT = '"¥"#,##0';
+  /* spreadsheets use whichever currency leads in the app */
+  const MAIN_FMT = () => (showYen ? YEN_FMT : PESO_FMT);
+  const MAIN_SYM = () => (showYen ? "¥" : "₱");
+  const mv = (php) => Math.round(showYen ? toYen(php) : php);
 
   const styleSheet = (ws, headerCount) => {
     ws.views = [{ state: "frozen", ySplit: 1 }];
@@ -836,12 +846,12 @@ function ZenPasabuy({ user, onLogout }) {
       { header: "Left", key: "f", width: 8 },
       { header: "Sold", key: "g", width: 8 },
       { header: "Unit ¥", key: "h", width: 11 },
-      { header: "Cost/pc ₱", key: "i", width: 12 },
-      { header: "Sell/pc ₱", key: "j", width: 12 },
-      { header: "Profit/pc ₱", key: "k", width: 13 },
+      { header: `Cost/pc ${MAIN_SYM()}`, key: "i", width: 12 },
+      { header: `Sell/pc ${MAIN_SYM()}`, key: "j", width: 12 },
+      { header: `Profit/pc ${MAIN_SYM()}`, key: "k", width: 13 },
       { header: "Margin", key: "l", width: 10 },
       { header: "Result", key: "m", width: 11 },
-      { header: "Stock value ₱", key: "n", width: 14 },
+      { header: `Stock value ${MAIN_SYM()}`, key: "n", width: 14 },
     ];
     styleSheet(ws, ws.columns.length);
     let i = 0, totStock = 0, totValue = 0, totProfit = 0;
@@ -854,16 +864,16 @@ function ZenPasabuy({ user, onLogout }) {
         const row = ws.addRow({
           a: p.name, b: p.tierName, c: l.date, d: l.store || "—",
           e: l.qty, f: l.remaining, g: l.qty - l.remaining,
-          h: Math.round(l.unitJpy), i: Math.round(l.unitCost), j: p.list,
-          k: Math.round(profit), l: margin, m: profit < 0 ? "LOSS" : "Profit",
-          n: Math.round(value),
+          h: Math.round(l.unitJpy), i: mv(l.unitCost), j: mv(p.list),
+          k: mv(profit), l: margin, m: profit < 0 ? "LOSS" : "Profit",
+          n: mv(value),
         });
         row.getCell("h").numFmt = YEN_FMT;
-        row.getCell("i").numFmt = PESO_FMT;
-        row.getCell("j").numFmt = PESO_FMT;
-        row.getCell("n").numFmt = PESO_FMT;
+        row.getCell("i").numFmt = MAIN_FMT();
+        row.getCell("j").numFmt = MAIN_FMT();
+        row.getCell("n").numFmt = MAIN_FMT();
         row.getCell("l").numFmt = "0%";
-        paintMoney(row.getCell("k"), profit, PESO_FMT);
+        paintMoney(row.getCell("k"), profit, MAIN_FMT());
         const res = row.getCell("m");
         res.font = { bold: true, color: { argb: argb(profit < 0 ? LOSS_HEX : GAIN_HEX) } };
         res.alignment = { horizontal: "center" };
@@ -871,9 +881,9 @@ function ZenPasabuy({ user, onLogout }) {
         stripe(row, i++);
       });
     });
-    const tr = ws.addRow({ a: `TOTALS · ${products.length} product(s)`, f: totStock, k: Math.round(totProfit), n: Math.round(totValue) });
-    tr.getCell("n").numFmt = PESO_FMT;
-    paintMoney(tr.getCell("k"), totProfit, PESO_FMT);
+    const tr = ws.addRow({ a: `TOTALS · ${products.length} product(s)`, f: totStock, k: mv(totProfit), n: mv(totValue) });
+    tr.getCell("n").numFmt = MAIN_FMT();
+    paintMoney(tr.getCell("k"), totProfit, MAIN_FMT());
     totalsRow(ws, tr);
 
     downloadBlob(`zen-pasabuy-inventory-${today()}.xlsx`, new Blob([await wb.xlsx.writeBuffer()], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
@@ -898,11 +908,11 @@ function ZenPasabuy({ user, onLogout }) {
       { header: "Product", key: "f", width: 26 },
       { header: "Qty", key: "g", width: 7 },
       { header: "Bought", key: "h", width: 9 },
-      { header: "Cost/pc ₱", key: "i", width: 12 },
-      { header: "Sell/pc ₱", key: "j", width: 12 },
-      { header: "Spent ₱", key: "k", width: 12 },
-      { header: "Revenue ₱", key: "l", width: 12 },
-      { header: "Profit ₱", key: "m", width: 12 },
+      { header: `Cost/pc ${MAIN_SYM()}`, key: "i", width: 12 },
+      { header: `Sell/pc ${MAIN_SYM()}`, key: "j", width: 12 },
+      { header: `Spent ${MAIN_SYM()}`, key: "k", width: 12 },
+      { header: `Revenue ${MAIN_SYM()}`, key: "l", width: 12 },
+      { header: `Profit ${MAIN_SYM()}`, key: "m", width: 12 },
       { header: "Margin", key: "n", width: 10 },
       { header: "Result", key: "o", width: 11 },
     ];
@@ -915,14 +925,14 @@ function ZenPasabuy({ user, onLogout }) {
         const row = ws.addRow({
           a: o.orderDate, b: o.customer, c: o.location || "—", d: PHASE[orderPhase(o)].label,
           e: o.eta || "—", f: l.name, g: l.qty, h: l.bought ? "Yes" : "No",
-          i: Math.round(l.unitCost), j: Math.round(l.sell), k: Math.round(lm.spent),
-          l: Math.round(lm.revenue), m: Math.round(lm.profit),
+          i: mv(l.unitCost), j: mv(l.sell), k: mv(lm.spent),
+          l: mv(lm.revenue), m: mv(lm.profit),
           n: lm.spent > 0 ? lm.profit / lm.spent : 0,
           o: lm.profit < 0 ? "LOSS" : "Profit",
         });
-        ["i", "j", "k", "l"].forEach((k) => (row.getCell(k).numFmt = PESO_FMT));
+        ["i", "j", "k", "l"].forEach((k) => (row.getCell(k).numFmt = MAIN_FMT()));
         row.getCell("n").numFmt = "0%";
-        paintMoney(row.getCell("m"), lm.profit, PESO_FMT);
+        paintMoney(row.getCell("m"), lm.profit, MAIN_FMT());
         const res = row.getCell("o");
         res.font = { bold: true, color: { argb: argb(lm.profit < 0 ? LOSS_HEX : GAIN_HEX) } };
         res.alignment = { horizontal: "center" };
@@ -934,12 +944,12 @@ function ZenPasabuy({ user, onLogout }) {
     const tProfit = tRev - tSpent;
     const tr = ws.addRow({
       a: "TOTALS", b: `${orders.length} order(s)`,
-      k: Math.round(tSpent), l: Math.round(tRev), m: Math.round(tProfit),
+      k: mv(tSpent), l: mv(tRev), m: mv(tProfit),
       n: tSpent > 0 ? tProfit / tSpent : 0, o: tProfit < 0 ? "LOSS" : "Profit",
     });
-    ["k", "l"].forEach((k) => (tr.getCell(k).numFmt = PESO_FMT));
+    ["k", "l"].forEach((k) => (tr.getCell(k).numFmt = MAIN_FMT()));
     tr.getCell("n").numFmt = "0%";
-    paintMoney(tr.getCell("m"), tProfit, PESO_FMT);
+    paintMoney(tr.getCell("m"), tProfit, MAIN_FMT());
     tr.getCell("o").font = { bold: true, color: { argb: argb(tProfit < 0 ? LOSS_HEX : GAIN_HEX) } };
     totalsRow(ws, tr);
 
@@ -1088,9 +1098,9 @@ function ZenPasabuy({ user, onLogout }) {
     <div style={{ ...card, padding: 14 }}>
       <div style={{ ...label, marginBottom: 2 }}>{title}</div>
       <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 23, fontWeight: 700, color: php < 0 ? DANGER : T.primary, lineHeight: 1.15 }}>
-        {raw !== undefined ? raw : yen(toYen(php))}
+        {raw !== undefined ? raw : M(php)}
       </div>
-      {raw === undefined && <div style={{ fontSize: 10.5, color: T.muted }}>{peso(php)}</div>}
+      {raw === undefined && <div style={{ fontSize: 10.5, color: T.muted }}>{M2(php)}</div>}
       <div style={{ fontSize: 10.5, color: T.muted }}>{sub}</div>
     </div>
   );
@@ -1103,7 +1113,7 @@ function ZenPasabuy({ user, onLogout }) {
     <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", fontFamily: "'Quicksand', sans-serif", fontSize: 13, fontWeight: strong || php < 0 ? 700 : 500, color: php < 0 ? DANGER : strong ? T.primary : T.ink, gap: 10 }}>
       <span style={{ color: php < 0 ? DANGER : strong ? T.primary : T.muted }}>{name}</span>
       <span style={{ textAlign: "right" }}>
-        {yen(toYen(php))} <span style={{ color: php < 0 ? DANGER : T.muted, fontWeight: 500, fontSize: 12 }}>· {peso(php)}</span>
+        {M(php)} <span style={{ color: php < 0 ? DANGER : T.muted, fontWeight: 500, fontSize: 12 }}>· {M2(php)}</span>
       </span>
     </div>
   );
@@ -1151,6 +1161,14 @@ function ZenPasabuy({ user, onLogout }) {
           <button onClick={() => refreshRate(false)} disabled={rateBusy} style={{ ...ghostBtn, padding: "6px 12px", fontSize: 12, color: T.accent, borderColor: T.pink }}>
             {rateBusy ? "fetching…" : "↻ refresh"}
           </button>
+          <div style={{ display: "flex", background: T.paper, border: `1.5px solid ${T.border}`, borderRadius: 999, overflow: "hidden" }}>
+            {[["jpy", "¥ Yen"], ["php", "₱ Peso"]].map(([v, name]) => (
+              <button key={v} onClick={() => setSettings({ ...settings, displayCcy: v })}
+                style={{ padding: "6px 12px", border: "none", background: (settings.displayCcy || "jpy") === v ? T.primary : "transparent", color: (settings.displayCcy || "jpy") === v ? "#fff" : T.muted, fontFamily: "'Quicksand', sans-serif", fontWeight: 700, fontSize: 11.5, cursor: "pointer" }}>
+                {name}
+              </button>
+            ))}
+          </div>
         </div>
 
         {!online && (
@@ -1216,7 +1234,7 @@ function ZenPasabuy({ user, onLogout }) {
                       <div style={{ minWidth: 0, flex: 1 }}>
                         <div style={{ fontWeight: 700, fontSize: 13.5 }}>{restockProduct.name}</div>
                         <div style={{ fontSize: 11, color: T.muted }}>
-                          {productStock(restockProduct)} in stock · sells at {peso(restockProduct.list)}
+                          {productStock(restockProduct)} in stock · sells at {M(restockProduct.list)}
                         </div>
                       </div>
                     </div>
@@ -1266,7 +1284,7 @@ function ZenPasabuy({ user, onLogout }) {
               </div>
               {totalJpyNum > 0 && (
                 <div style={{ marginTop: 8, fontSize: 12.5, color: T.muted }}>
-                  {qtyNum > 1 ? (<>Wholesale: <b style={{ color: T.primary }}>{yen(unitJpy)}</b> per piece · {peso(unitJpy * rate)} landed each</>) : (<>= <b style={{ color: T.primary }}>{peso(totalJpyNum * rate)}</b> landed</>)}
+                  {qtyNum > 1 ? (<>Wholesale: <b style={{ color: T.primary }}>{yen(unitJpy)}</b> per piece · {M(unitJpy * rate)} landed each</>) : (<>= <b style={{ color: T.primary }}>{M(totalJpyNum * rate)}</b> landed</>)}
                   {" "}· buffer {settings.buffer}% · haggle {settings.negotiation}%
                 </div>
               )}
@@ -1290,7 +1308,7 @@ function ZenPasabuy({ user, onLogout }) {
                 ))}
               </div>
               <div style={{ fontSize: 11.5, color: T.muted, marginTop: 8 }}>
-                {source.note} · adds {yen(source.feeJpy)} ({peso(feePhp(source))}) per piece
+                {source.note} · adds {yen(source.feeJpy)} ({M(feePhp(source))}) per piece
               </div>
             </div>
 
@@ -1299,10 +1317,10 @@ function ZenPasabuy({ user, onLogout }) {
                 <div style={{ background: T.paper, border: `1.5px solid ${T.pink}`, borderRadius: 20, overflow: "hidden", boxShadow: "0 8px 24px rgba(0,0,0,0.10)" }}>
                   <div style={{ background: `linear-gradient(120deg, ${T.primary}, ${T.accent})`, padding: "16px 18px 18px", color: "#fff", textAlign: "center" }}>
                     <div style={{ fontFamily: "'Quicksand', sans-serif", fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", opacity: 0.85 }}>Quote per piece</div>
-                    <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 48, fontWeight: 600, lineHeight: 1.05 }}>{yen(toYen(result.list))}</div>
-                    <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, opacity: 0.9, marginTop: -2 }}>{peso(result.list)}</div>
+                    <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 48, fontWeight: 600, lineHeight: 1.05 }}>{M(result.list)}</div>
+                    <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, opacity: 0.9, marginTop: -2 }}>{M2(result.list)}</div>
                     <div style={{ fontFamily: "'Quicksand', sans-serif", fontSize: 12.5, opacity: 0.92, marginTop: 6 }}>
-                      Never go below <b style={{ fontSize: 15 }}>{yen(toYen(result.floor))}</b> <span style={{ opacity: 0.85 }}>({peso(result.floor)})</span> · {tier.name} · {source.name}
+                      Never go below <b style={{ fontSize: 15 }}>{M(result.floor)}</b> <span style={{ opacity: 0.85 }}>({M2(result.floor)})</span> · {tier.name} · {source.name}
                     </div>
                   </div>
                   <div style={{ borderTop: `2px dashed ${T.border}`, margin: "0 14px" }} />
@@ -1345,33 +1363,33 @@ function ZenPasabuy({ user, onLogout }) {
                             value={yen(unitJpy)} />
                         )}
                         <Step n={qtyNum > 1 ? "1" : "1"} title="Convert to pesos"
-                          formula={`${yen(unitJpy)} × ₱${r4} = ${peso(result.landed)}`}
-                          value={peso(result.landed)}
+                          formula={`${yen(unitJpy)} × ₱${r4} = ${M(result.landed)}`}
+                          value={M(result.landed)}
                           note={settings.rateMode === "live" && settings.liveRate ? "live market rate" : "your saved rate"} />
                         <Step n="2" title={`Buffer (${settings.buffer}%)`}
-                          formula={`${peso(result.landed)} × ${settings.buffer}% = ${peso(result.bufferAmt)}`}
-                          value={peso(result.bufferAmt)}
+                          formula={`${M(result.landed)} × ${settings.buffer}% = ${M(result.bufferAmt)}`}
+                          value={M(result.bufferAmt)}
                           note="covers rate swings, packaging, small extras" />
                         <Step n="3" title={`Logistics & effort — ${source.name}`}
-                          formula={`${yen(source.feeJpy)} × ₱${r4} = ${peso(result.fee)}`}
-                          value={peso(result.fee)}
+                          formula={`${yen(source.feeJpy)} × ₱${r4} = ${M(result.fee)}`}
+                          value={M(result.fee)}
                           note="train fare + time, per piece" />
                         <Step n="4" title="Your true cost per piece"
-                          formula={`${peso(result.landed)} + ${peso(result.bufferAmt)} + ${peso(result.fee)} = ${peso(result.trueCost)}`}
-                          value={peso(result.trueCost)}
+                          formula={`${M(result.landed)} + ${M(result.bufferAmt)} + ${M(result.fee)} = ${M(result.trueCost)}`}
+                          value={M(result.trueCost)}
                           note="break-even — selling below this loses money" />
                         <Step n="5" title={`Floor price — ${tier.name} tier (+${tier.margin}%)`}
-                          formula={`${peso(result.trueCost)} × ${(1 + tier.margin / 100).toFixed(2)} = ${peso(result.trueCost * (1 + tier.margin / 100))} → rounded up to ${peso(result.floor)}`}
-                          value={peso(result.floor)}
+                          formula={`${M(result.trueCost)} × ${(1 + tier.margin / 100).toFixed(2)} = ${M(result.trueCost * (1 + tier.margin / 100))} → rounded up to ${M(result.floor)}`}
+                          value={M(result.floor)}
                           note="rounded up to the nearest ₱5 — the lowest you should ever agree to" />
                         <Step n="6" title={`Quote price (+${settings.negotiation}% haggle room)`}
-                          formula={`${peso(result.floor)} × ${(1 + settings.negotiation / 100).toFixed(2)} = ${peso(result.floor * (1 + settings.negotiation / 100))} → rounded up to ${peso(result.list)}`}
-                          value={peso(result.list)}
+                          formula={`${M(result.floor)} × ${(1 + settings.negotiation / 100).toFixed(2)} = ${M(result.floor * (1 + settings.negotiation / 100))} → rounded up to ${M(result.list)}`}
+                          value={M(result.list)}
                           note="rounded up to the nearest ₱10 — what you tell the customer" />
                         <Step n="7" title="Profit check"
-                          formula={`${peso(result.list)} − ${peso(result.trueCost)} = ${peso(result.profitAtList)} (${pct((result.profitAtList / result.trueCost) * 100)} of cost)`}
-                          value={`+${peso(result.profitAtList)}`}
-                          note={`if haggled down to the floor: +${peso(result.profitAtFloor)}${qtyNum > 1 ? ` · whole batch: +${peso(result.profitAtList * qtyNum)}` : ""}`} />
+                          formula={`${M(result.list)} − ${M(result.trueCost)} = ${M(result.profitAtList)} (${pct((result.profitAtList / result.trueCost) * 100)} of cost)`}
+                          value={`+${M(result.profitAtList)}`}
+                          note={`if haggled down to the floor: +${M(result.profitAtFloor)}${qtyNum > 1 ? ` · whole batch: +${M(result.profitAtList * qtyNum)}` : ""}`} />
                         <div style={{ padding: "10px 16px", fontSize: 11, color: T.muted, borderTop: `1px solid ${T.border}` }}>
                           Every percentage above is editable in <b>Set-up</b> — buffer, haggle room, tier margins, and sourcing fees.
                         </div>
@@ -1388,8 +1406,8 @@ function ZenPasabuy({ user, onLogout }) {
                       ["Shop", pStore.trim() || "—"],
                       ["Date bought", pDate || today()],
                       ["Buying", `${qtyNum} pc(s) for ${yen(totalJpyNum)}${qtyNum > 1 ? ` · ${yen(unitJpy)}/pc` : ""}`],
-                      ["Cost per piece", `${peso(result.trueCost)} · ${tier.name} · ${source.name}`],
-                      ["Selling price", `${peso(result.list)}${Math.round(result.list) !== Math.round(restockProduct.list) ? ` (was ${peso(restockProduct.list)})` : ""}`],
+                      ["Cost per piece", `${M(result.trueCost)} · ${tier.name} · ${source.name}`],
+                      ["Selling price", `${M(result.list)}${Math.round(result.list) !== Math.round(restockProduct.list) ? ` (was ${M(restockProduct.list)})` : ""}`],
                       ["Stock after", `${productStock(restockProduct) + qtyNum} pc(s)`],
                     ].map(([k, v]) => (
                       <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "5px 0", fontSize: 12.5, borderBottom: `1px solid ${T.border}` }}>
@@ -1399,7 +1417,7 @@ function ZenPasabuy({ user, onLogout }) {
                     ))}
                     {Math.round(result.list) !== Math.round(restockProduct.list) && (
                       <div style={{ fontSize: 11.5, color: T.accent, fontWeight: 700, marginTop: 8 }}>
-                        Saving updates this product's selling price to {peso(result.list)}. Older batches keep the cost they were bought at.
+                        Saving updates this product's selling price to {M(result.list)}. Older batches keep the cost they were bought at.
                       </div>
                     )}
                   </div>
@@ -1455,9 +1473,9 @@ function ZenPasabuy({ user, onLogout }) {
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                <StatBox title="Selling price" php={pageProduct.list} sub={`floor ${peso(pageProduct.floor)}`} />
+                <StatBox title="Selling price" php={pageProduct.list} sub={`floor ${M(pageProduct.floor)}`} />
                 <StatBox title="Avg cost / pc" php={avgCost} sub="landed + buffer + effort" />
-                <StatBox title="Profit margin" php={unitProfit} raw={<span style={{ color: unitProfit < 0 ? DANGER : T.primary }}>{signedPeso(unitProfit)}</span>} sub={`${pct(avgCost > 0 ? (unitProfit / avgCost) * 100 : NaN)} per piece at quote`} />
+                <StatBox title="Profit margin" php={unitProfit} raw={<span style={{ color: unitProfit < 0 ? DANGER : T.primary }}>{signedM(unitProfit)}</span>} sub={`${pct(avgCost > 0 ? (unitProfit / avgCost) * 100 : NaN)} per piece at quote`} />
                 <StatBox title="Inventory" raw={`${stock} / ${bought}`} sub={`${sold} sold so far`} />
               </div>
 
@@ -1469,9 +1487,9 @@ function ZenPasabuy({ user, onLogout }) {
                   <div style={{ fontSize: 13.5 }}>
                     <b style={{ color: T.primary }}>{sold} pc(s)</b>
                     <span style={{ color: T.muted }}> · revenue </span>
-                    <b style={{ color: T.primary }}>{peso(soldRevenue)}</b>
-                    <span style={{ color: T.muted }}> ({yen(toYen(soldRevenue))}) · profit </span>
-                    <b style={{ color: soldProfit < 0 ? DANGER : T.good }}>{signedPeso(soldProfit)}</b>
+                    <b style={{ color: T.primary }}>{M(soldRevenue)}</b>
+                    <span style={{ color: T.muted }}> ({M2(soldRevenue)}) · profit </span>
+                    <b style={{ color: soldProfit < 0 ? DANGER : T.good }}>{signedM(soldProfit)}</b>
                   </div>
                 )}
               </div>
@@ -1482,7 +1500,7 @@ function ZenPasabuy({ user, onLogout }) {
                   <div key={l.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "7px 0", borderBottom: `1px solid ${T.border}`, fontSize: 12.5 }}>
                     <div>
                       <b>{l.date}</b>{l.store ? <span style={{ color: T.muted }}> · {l.store}</span> : ""}
-                      <div style={{ color: T.muted, fontSize: 11 }}>{yen(l.unitJpy)}/pc · cost {peso(l.unitCost)}/pc · {yen(l.totalJpy)} total</div>
+                      <div style={{ color: T.muted, fontSize: 11 }}>{yen(l.unitJpy)}/pc · cost {M(l.unitCost)}/pc · {yen(l.totalJpy)} total</div>
                     </div>
                     <b style={{ color: l.remaining ? T.good : T.pink, flexShrink: 0 }}>{l.remaining}/{l.qty} left</b>
                   </div>
@@ -1500,7 +1518,7 @@ function ZenPasabuy({ user, onLogout }) {
                       <span style={{ color: T.muted }}> · {h.type === "buy" ? h.label : `to ${h.label}`}</span>
                       <div style={{ color: T.muted, fontSize: 11 }}>{h.date}</div>
                     </div>
-                    <span style={{ color: T.muted, flexShrink: 0, fontWeight: 700 }}>{h.type === "buy" ? `−${peso(h.php)}` : `+${peso(h.php)}`}</span>
+                    <span style={{ color: T.muted, flexShrink: 0, fontWeight: 700 }}>{h.type === "buy" ? `−${M(h.php)}` : `+${M(h.php)}`}</span>
                   </div>
                 ))}
               </div>
@@ -1597,21 +1615,21 @@ function ZenPasabuy({ user, onLogout }) {
                             <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: r.stock === 0 ? T.pink : T.ink }}>{r.stock}</td>
                             <td style={{ ...cell, textAlign: "right", color: T.muted }}>{r.bought}</td>
                             <td style={{ ...cell, textAlign: "right", color: T.muted }}>{r.sold}</td>
-                            <td style={{ ...cell, textAlign: "right" }}>{peso(r.cost)}</td>
-                            <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: T.primary }}>{peso(r.p.list)}</td>
-                            <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: pc }}>{signedPeso(r.profit)}</td>
+                            <td style={{ ...cell, textAlign: "right" }}>{M(r.cost)}</td>
+                            <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: T.primary }}>{M(r.p.list)}</td>
+                            <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: pc }}>{signedM(r.profit)}</td>
                             <td style={{ ...cell, textAlign: "right", color: pc }}>{pct(r.margin)}</td>
                             <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: pc }}>{r.profit < 0 ? "LOSS" : "Profit"}</td>
-                            <td style={{ ...cell, textAlign: "right" }}>{peso(r.value)}</td>
+                            <td style={{ ...cell, textAlign: "right" }}>{M(r.value)}</td>
                           </tr>
                         );
                       })}
                       <tr style={{ background: T.bg, borderTop: `2px solid ${T.primary}` }}>
                         <td style={{ ...cell, fontWeight: 700, position: "sticky", left: 0, background: T.bg }}>Totals · {rows.length}</td>
                         <td style={cell} colSpan={6} />
-                        <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: tp < 0 ? DANGER : T.good }}>{signedPeso(tp)}</td>
+                        <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: tp < 0 ? DANGER : T.good }}>{signedM(tp)}</td>
                         <td style={cell} colSpan={2} />
-                        <td style={{ ...cell, textAlign: "right", fontWeight: 700 }}>{peso(tv)}</td>
+                        <td style={{ ...cell, textAlign: "right", fontWeight: 700 }}>{M(tv)}</td>
                       </tr>
                     </tbody>
                   </table>
@@ -1635,7 +1653,7 @@ function ZenPasabuy({ user, onLogout }) {
                         </span>
                       </div>
                       <div style={{ fontSize: 11.5, color: T.muted, marginTop: 2 }}>
-                        sell {yen(toYen(p.list))} ({peso(p.list)})/pc · {p.tierName}{bought - stock > 0 ? ` · ${bought - stock} sold` : ""}
+                        sell {M(p.list)} ({M2(p.list)})/pc · {p.tierName}{bought - stock > 0 ? ` · ${bought - stock} sold` : ""}
                       </div>
                       <div style={{ fontSize: 11.5, color: T.muted, marginTop: 2 }}>
                         {lots.length} batch{lots.length > 1 ? "es" : ""} · first bought {lots[0]?.date} · tap for product page →
@@ -1680,8 +1698,8 @@ function ZenPasabuy({ user, onLogout }) {
                       <tr key={ym} style={{ background: idx % 2 ? T.soft : T.paper }}>
                         <td style={{ padding: "8px 12px", fontWeight: 700 }}>{ym === "—" ? "No date" : monthName(ym)}</td>
                         <td style={{ padding: "8px 12px", textAlign: "right" }}>{m.count}</td>
-                        <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, color: T.primary }}>{peso(m.revenue)}</td>
-                        <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, color: m.profit < 0 ? DANGER : T.good }}>{signedPeso(m.profit)}</td>
+                        <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, color: T.primary }}>{M(m.revenue)}</td>
+                        <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, color: m.profit < 0 ? DANGER : T.good }}>{signedM(m.profit)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1769,7 +1787,7 @@ function ZenPasabuy({ user, onLogout }) {
                       const avail = draftAvail(p);
                       return (
                         <option key={p.id} value={p.id} disabled={avail <= 0}>
-                          📦 {p.name} — {avail <= 0 ? "sold out" : `${avail} in stock`} · {peso(p.floor)}–{peso(p.list)}
+                          📦 {p.name} — {avail <= 0 ? "sold out" : `${avail} in stock`} · {M(p.floor)}–{M(p.list)}
                         </option>
                       );
                     })}
@@ -1780,7 +1798,7 @@ function ZenPasabuy({ user, onLogout }) {
                     const cpp = allocs.length ? allocs.reduce((a, x) => a + x.unitCost * x.qty, 0) / allocs.reduce((a, x) => a + x.qty, 0) : productAvgCost(lineProduct);
                     return (
                       <div style={{ fontSize: 11.5, color: T.muted, marginTop: 6 }}>
-                        <b style={{ color: T.primary }}>Cost/pc {yen(toYen(cpp))} · {peso(cpp)}</b>
+                        <b style={{ color: T.primary }}>Cost/pc {M(cpp)} · {M2(cpp)}</b>
                         {" "}— {short > 0 ? `only ${q - short} pc(s) on hand` : `${draftAvail(lineProduct)} pc(s) on hand`} · oldest batch first · counts as bought
                       </div>
                     );
@@ -1819,7 +1837,7 @@ function ZenPasabuy({ user, onLogout }) {
                             return (
                               <button key={x.key} onClick={() => setLineSell(String(x.value))}
                                 style={{ padding: "6px 11px", borderRadius: 999, border: `1.5px solid ${on ? T.primary : T.border}`, background: on ? T.primary : T.paper, color: on ? "#fff" : T.ink, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Quicksand', sans-serif" }}>
-                                {x.label} {peso(x.value)}
+                                {x.label} {M(x.value)}
                                 <span style={{ opacity: .75, fontWeight: 500 }}> · {x.note}</span>
                               </button>
                             );
@@ -1830,7 +1848,7 @@ function ZenPasabuy({ user, onLogout }) {
                   })()}
                   {lineSell && parseFloat(lineSell) > 0 && (
                     <div style={{ fontSize: 11, color: T.muted, marginTop: 6 }}>
-                      Sell each ≈ {yen(toYen(parseFloat(lineSell)))} · {peso(parseFloat(lineSell))}
+                      Sell each ≈ {M(parseFloat(lineSell))} · {M2(parseFloat(lineSell))}
                     </div>
                   )}
                 </div>
@@ -1852,7 +1870,7 @@ function ZenPasabuy({ user, onLogout }) {
                               <div style={{ fontSize: 11, color: T.muted }}>price and quantity set when you buy it</div>
                             ) : (
                               <div style={{ fontSize: 11, color: T.muted }}>
-                                sell {yen(toYen(l.sell))} ({peso(l.sell)}) each · profit <span style={{ color: m.profit < 0 ? DANGER : T.good, fontWeight: 700 }}>{signedPeso(m.profit)} ({pct(m.margin)})</span>
+                                sell {M(l.sell)} ({M2(l.sell)}) each · profit <span style={{ color: m.profit < 0 ? DANGER : T.good, fontWeight: 700 }}>{signedM(m.profit)} ({pct(m.margin)})</span>
                               </div>
                             )}
                           </div>
@@ -1865,10 +1883,10 @@ function ZenPasabuy({ user, onLogout }) {
                       return (
                         <div style={{ marginTop: 10, fontSize: 13 }}>
                           <b style={{ color: T.primary }}>{m.units} pc(s)</b>
-                          <span style={{ color: T.muted }}> · spend {peso(m.spent)} · charge </span>
-                          <b style={{ color: T.primary }}>{peso(m.revenue)}</b>
+                          <span style={{ color: T.muted }}> · spend {M(m.spent)} · charge </span>
+                          <b style={{ color: T.primary }}>{M(m.revenue)}</b>
                           <span style={{ color: T.muted }}> · profit </span>
-                          <b style={{ color: m.profit < 0 ? DANGER : T.good }}>{signedPeso(m.profit)} ({pct(m.margin)})</b>
+                          <b style={{ color: m.profit < 0 ? DANGER : T.good }}>{signedM(m.profit)} ({pct(m.margin)})</b>
                         </div>
                       );
                     })()}
@@ -1908,8 +1926,8 @@ function ZenPasabuy({ user, onLogout }) {
                       </div>
                     </div>
                     <div style={{ textAlign: "right", flexShrink: 0 }}>
-                      <div style={{ fontWeight: 700, color: T.primary, fontSize: 14 }}>{peso(m.revenue)}</div>
-                      <div style={{ fontSize: 11, color: m.profit < 0 ? DANGER : T.good, fontWeight: 700 }}>{signedPeso(m.profit)} ({pct(m.margin)})</div>
+                      <div style={{ fontWeight: 700, color: T.primary, fontSize: 14 }}>{M(m.revenue)}</div>
+                      <div style={{ fontSize: 11, color: m.profit < 0 ? DANGER : T.good, fontWeight: 700 }}>{signedM(m.profit)} ({pct(m.margin)})</div>
                     </div>
                   </div>
 
@@ -1927,7 +1945,7 @@ function ZenPasabuy({ user, onLogout }) {
 
                   {m.profit < 0 && (
                     <div style={{ marginTop: 8, padding: "7px 10px", borderRadius: 10, background: "rgba(214,69,69,0.10)", border: `1px solid ${DANGER}`, color: DANGER, fontSize: 11.5, fontWeight: 700 }}>
-                      ⚠️ This order loses {peso(Math.abs(m.profit))} — open it and raise the selling prices.
+                      ⚠️ This order loses {M(Math.abs(m.profit))} — open it and raise the selling prices.
                     </div>
                   )}
 
@@ -1963,7 +1981,7 @@ function ZenPasabuy({ user, onLogout }) {
                               </div>
                             ) : (
                               <div style={{ color: T.muted, fontSize: 11.5, marginTop: 2 }}>
-                                cost {yen(toYen(l.unitCost))} ({peso(l.unitCost)})/pc → sell {yen(toYen(l.sell))} ({peso(l.sell)})/pc · profit <span style={{ color: lm.profit < 0 ? DANGER : T.good, fontWeight: 700 }}>{signedPeso(lm.profit)} ({pct(lm.margin)})</span>
+                                cost {M(l.unitCost)} ({M2(l.unitCost)})/pc → sell {M(l.sell)} ({M2(l.sell)})/pc · profit <span style={{ color: lm.profit < 0 ? DANGER : T.good, fontWeight: 700 }}>{signedM(lm.profit)} ({pct(lm.margin)})</span>
                               </div>
                             )}
                             {Array.isArray(l.allocs) && l.allocs.length > 0 && (
@@ -1973,7 +1991,7 @@ function ZenPasabuy({ user, onLogout }) {
                             )}
                             {lm.profit < 0 && (
                               <div style={{ color: DANGER, fontSize: 11, fontWeight: 700, marginTop: 2 }}>
-                                ⚠️ Selling below cost — raise the price by at least {peso(Math.abs(lm.profit) / l.qty)} per piece.
+                                ⚠️ Selling below cost — raise the price by at least {M(Math.abs(lm.profit) / l.qty)} per piece.
                               </div>
                             )}
                             {editOrderId === o.id && !Array.isArray(l.allocs) && (
@@ -1994,7 +2012,7 @@ function ZenPasabuy({ user, onLogout }) {
                                   return priceSuggestions(base.floor, base.list).map((x) => (
                                     <button key={x.key} onClick={() => setLineSellPrice(o.id, l.id, x.value)}
                                       style={{ padding: "5px 9px", borderRadius: 999, border: `1.5px solid ${Math.round(l.sell) === Math.round(x.value) ? T.primary : T.border}`, background: Math.round(l.sell) === Math.round(x.value) ? T.primary : T.paper, color: Math.round(l.sell) === Math.round(x.value) ? "#fff" : T.ink, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Quicksand', sans-serif" }}>
-                                      {x.label} {peso(x.value)}
+                                      {x.label} {M(x.value)}
                                     </button>
                                   ));
                                 })()}
@@ -2016,7 +2034,7 @@ function ZenPasabuy({ user, onLogout }) {
                               const av = productStock(p);
                               return (
                                 <option key={p.id} value={p.id} disabled={av <= 0}>
-                                  📦 {p.name} — {av <= 0 ? "sold out" : `${av} in stock`} · {peso(p.floor)}–{peso(p.list)}
+                                  📦 {p.name} — {av <= 0 ? "sold out" : `${av} in stock`} · {M(p.floor)}–{M(p.list)}
                                 </option>
                               );
                             })}
@@ -2060,7 +2078,7 @@ function ZenPasabuy({ user, onLogout }) {
                                     return (
                                       <button key={x.key} onClick={() => setESell(String(x.value))}
                                         style={{ padding: "6px 11px", borderRadius: 999, border: `1.5px solid ${on ? T.primary : T.border}`, background: on ? T.primary : T.paper, color: on ? "#fff" : T.ink, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Quicksand', sans-serif" }}>
-                                        {x.label} {peso(x.value)}
+                                        {x.label} {M(x.value)}
                                         <span style={{ opacity: .75, fontWeight: 500 }}> · {x.note}</span>
                                       </button>
                                     );
@@ -2073,9 +2091,9 @@ function ZenPasabuy({ user, onLogout }) {
                       )}
 
                       <div style={{ marginTop: 8, fontSize: 12.5 }}>
-                        <span style={{ color: T.muted }}>Total spent {peso(m.spent)} · charge </span>
-                        <b style={{ color: T.primary }}>{peso(m.revenue)}</b>
-                        <span style={{ color: T.muted }}> ({yen(toYen(m.revenue))})</span>
+                        <span style={{ color: T.muted }}>Total spent {M(m.spent)} · charge </span>
+                        <b style={{ color: T.primary }}>{M(m.revenue)}</b>
+                        <span style={{ color: T.muted }}> ({M2(m.revenue)})</span>
                       </div>
 
                       {/* lifecycle actions */}
@@ -2194,7 +2212,7 @@ function ZenPasabuy({ user, onLogout }) {
                     <button onClick={() => removeSourcing(i)} title="Remove sourcing type" style={{ border: "none", background: "transparent", color: T.pink, fontSize: 16, cursor: "pointer" }}>✕</button>
                   </div>
                   <input value={sc.note} onChange={(e) => updSourcing(i, { note: e.target.value })} placeholder="When you use it" style={{ ...inputStyle, marginTop: 8, padding: "8px 12px", fontSize: 12.5, fontWeight: 500 }} />
-                  <div style={{ fontSize: 10.5, color: T.muted, marginTop: 6 }}>≈{peso(feePhp(sc))} per item at today's rate</div>
+                  <div style={{ fontSize: 10.5, color: T.muted, marginTop: 6 }}>≈{M(feePhp(sc))} per item at today's rate</div>
                 </div>
               ))}
               <button onClick={addSourcing} style={{ ...dashedBtn, width: "100%", marginTop: 10 }}>+ Add a sourcing type</button>
