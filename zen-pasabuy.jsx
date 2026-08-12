@@ -88,8 +88,8 @@ async function sha256Hex(text) {
 const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "7.8.0";
-const APP_UPDATED = "Aug 12, 2026 · 9:05 PM PHT";
+const APP_VERSION = "7.8.1";
+const APP_UPDATED = "Aug 12, 2026 · 10:40 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -2662,6 +2662,22 @@ function ZenPasabuy({ user, onLogout }) {
               </div>
             </div>
 
+            <Guide id="setup" title="Set-up"
+              steps={[
+                ["Set the exchange rate", "Live rate follows the market. My own rate is for when you already changed cash at a fixed rate — use that number so your costs match reality."],
+                ["Set your buffer and haggle room", "Buffer quietly covers rate swings, packaging and small extras. Haggle room is the padding above your floor, so there's something to give away when a customer bargains."],
+                ["Shape your tiers", "Rename them, rewrite the description, change the margin, add or remove as many as you like. Changes only take effect when you press Save."],
+                ["Set your sourcing fees", "Put a ¥ figure on the effort of each way you get items. Add up a day's train fare, divide by the items you expect to find, and use that for your bigger trips."],
+                ["Enter your balikbayan box cost", "Total what one box costs door to door, its capacity in litres, and how full you realistically pack it. The app turns that into a ¥ per litre figure."],
+                ["Build your shipping sizes", "Give each size the litres it takes, tap Recompute, and every size gets its fair share of the box. Or type the ¥ yourself and ignore litres entirely."],
+                ["Save a default you trust", "Once your setup feels right, save it as your default. Every later change is kept in history, so you can always roll back."],
+                ["Back up regularly", "Export everything writes one JSON file with your inventory, photos, orders and settings. That file is the only way to move data to another phone."],
+              ]}
+              tips={[
+                "Nothing in this app talks to a server — everything lives on this device, which is why the backup file matters so much.",
+                "Recompute rewrites every size that has litres set. Anything on 0 L stays free.",
+              ]} />
+
             <div style={card}>
               <span style={label}>Website colors</span>
               {[false, true].map((isDark) => (
@@ -2724,19 +2740,6 @@ function ZenPasabuy({ user, onLogout }) {
             </div>
 
             <div style={card}>
-              <span style={label}>Refresh app</span>
-              <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 10 }}>
-                Pull the latest version of the app. Use this after an update if you're still seeing an old version.
-                Your inventory, orders, and settings are kept — this only refetches the app itself.
-              </div>
-              <button onClick={refreshApp} style={{ ...primaryBtn, width: "100%" }}>Refresh to latest version</button>
-              <div style={{ textAlign: "center", marginTop: 10, fontSize: 11.5, color: T.muted }}>
-                Version {APP_VERSION}
-                <br />App updated: {APP_UPDATED}
-              </div>
-            </div>
-
-            <div style={card}>
               <span style={label}>Saved suggestions</span>
               <div style={{ fontSize: 12.5, color: T.muted }}>
                 Zen Pasabuy remembers what you type so you can pick it next time instead of retyping.
@@ -2777,21 +2780,6 @@ function ZenPasabuy({ user, onLogout }) {
               </div>
             </div>
 
-            <Guide id="setup" title="Set-up"
-              steps={[
-                ["Set the exchange rate", "Live rate follows the market. My own rate is for when you already changed cash at a fixed rate — use that number so your costs match reality."],
-                ["Set your buffer and haggle room", "Buffer quietly covers rate swings, packaging and small extras. Haggle room is the padding above your floor, so there's something to give away when a customer bargains."],
-                ["Shape your tiers", "Rename them, rewrite the description, change the margin, add or remove as many as you like. Changes only take effect when you press Save."],
-                ["Set your sourcing fees", "Put a ¥ figure on the effort of each way you get items. Add up a day's train fare, divide by the items you expect to find, and use that for your bigger trips."],
-                ["Enter your balikbayan box cost", "Total what one box costs door to door, its capacity in litres, and how full you realistically pack it. The app turns that into a ¥ per litre figure."],
-                ["Build your shipping sizes", "Give each size the litres it takes, tap Recompute, and every size gets its fair share of the box. Or type the ¥ yourself and ignore litres entirely."],
-                ["Save a default you trust", "Once your setup feels right, save it as your default. Every later change is kept in history, so you can always roll back."],
-                ["Back up regularly", "Export everything writes one JSON file with your inventory, photos, orders and settings. That file is the only way to move data to another phone."],
-              ]}
-              tips={[
-                "Nothing in this app talks to a server — everything lives on this device, which is why the backup file matters so much.",
-                "Recompute rewrites every size that has litres set. Anything on 0 L stays free.",
-              ]} />
           </div>
         )}
 
