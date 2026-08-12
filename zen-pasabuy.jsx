@@ -77,8 +77,8 @@ async function sha256Hex(text) {
 const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "7.4.0";
-const APP_UPDATED = "Aug 12, 2026 · 2:56 PM PHT";
+const APP_VERSION = "7.5.0";
+const APP_UPDATED = "Aug 12, 2026 · 2:59 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -175,6 +175,36 @@ const orderPhase = (o) => {
 };
 
 const csvCell = (v) => { const s = String(v ?? ""); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+/* spreadsheet colours: theme for the chrome, fixed green/red for money */
+const GAIN_HEX = "#2e7d4f";
+const LOSS_HEX = "#c62828";
+const argb = (hex, fallback = "FF000000") => {
+  const h = String(hex || "").replace("#", "").trim();
+  return h.length === 6 ? "FF" + h.toUpperCase() : fallback;
+};
+
+/* ExcelJS is loaded on first export so it never slows the app down */
+let excelLoading = null;
+function ensureExcel() {
+  if (window.ExcelJS) return Promise.resolve(window.ExcelJS);
+  if (excelLoading) return excelLoading;
+  excelLoading = new Promise((resolve, reject) => {
+    const el = document.createElement("script");
+    el.src = "https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js";
+    el.onload = () => resolve(window.ExcelJS);
+    el.onerror = () => { excelLoading = null; reject(new Error("offline")); };
+    document.head.appendChild(el);
+  });
+  return excelLoading;
+}
+
+function downloadBlob(filename, blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function download(filename, text, type) {
   const blob = new Blob([text], { type });
   const url = URL.createObjectURL(blob);
@@ -287,6 +317,7 @@ function ZenPasabuy({ user, onLogout }) {
   const [pageId, setPageId] = useState(null);
   const [invSearch, setInvSearch] = useState("");
   const [shopFilter, setShopFilter] = useState("all");
+  const [invView, setInvView] = useState("cards"); // cards | sheet
 
   const T = { ...SWEETIES_THEME, ...(settings.theme || {}) };
   const ping = (msg) => { setToast(msg); setTimeout(() => setToast(""), 2600); };
@@ -752,25 +783,170 @@ function ZenPasabuy({ user, onLogout }) {
   }, [pageProduct, pageSales]);
 
   /* export / import */
-  const exportProductsCSV = () => {
-    const head = ["Product", "Tier", "Date bought", "Shop", "Bought", "Remaining", "Total ¥", "Unit ¥", "Unit cost ₱", "Sell ₱", "Has photo"];
-    const rows = [];
-    products.forEach((p) => (p.lots || []).forEach((l) => rows.push([p.name, p.tierName, l.date, l.store, l.qty, l.remaining, l.totalJpy, Math.round(l.unitJpy), Math.round(l.unitCost), p.list, p.photo ? "Yes" : "No"])));
-    download(`zen-pasabuy-inventory-${today()}.csv`, [head, ...rows].map((r) => r.map(csvCell).join(",")).join("\n"), "text/csv");
-    ping("Inventory exported (photos live in the JSON backup)");
+  /* ── spreadsheet exports (.xlsx, themed, with green gains and red losses) ── */
+  const PESO_FMT = '"₱"#,##0';
+  const YEN_FMT = '"¥"#,##0';
+
+  const styleSheet = (ws, headerCount) => {
+    ws.views = [{ state: "frozen", ySplit: 1 }];
+    ws.getRow(1).height = 22;
+    ws.getRow(1).eachCell((c) => {
+      c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: argb(T.primary, "FF801D5C") } };
+      c.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+      c.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+    });
+    ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: headerCount } };
   };
-  const exportOrdersCSV = () => {
-    const head = ["Order date", "Customer", "Location", "Status", "ETA", "Product", "Qty", "Bought", "Unit cost ₱", "Sell each ₱", "Spent ₱", "Revenue ₱", "Profit ₱", "Profit %"];
-    const rows = [];
-    orders.forEach((o) => o.lines.forEach((l) => {
-      const m = lineMath(l);
-      rows.push([o.orderDate, o.customer, o.location || "", PHASE[orderPhase(o)].label, o.eta || "", l.name, l.qty, l.bought ? "Yes" : "No", Math.round(l.unitCost), Math.round(l.sell), Math.round(m.spent), Math.round(m.revenue), Math.round(m.profit), Math.round(m.margin) + "%"]);
-    }));
-    rows.push([]);
-    rows.push(["TOTALS", "", "", "", "", "", "", "", "", "", Math.round(allStats.spent), Math.round(allStats.revenue), Math.round(allStats.profit), Math.round(allStats.margin) + "%"]);
-    download(`zen-pasabuy-orders-${today()}.csv`, [head, ...rows].map((r) => r.map(csvCell).join(",")).join("\n"), "text/csv");
-    ping("Orders exported");
+
+  const paintMoney = (cell, value, fmt) => {
+    cell.numFmt = fmt;
+    cell.font = { bold: true, color: { argb: argb(value < 0 ? LOSS_HEX : GAIN_HEX) } };
+    if (value < 0) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFDE7E7" } };
   };
+
+  const stripe = (row, i) => {
+    if (i % 2 === 0) return;
+    row.eachCell((c) => {
+      if (!c.fill) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: argb(T.soft, "FFFBF2F8") } };
+    });
+  };
+
+  const totalsRow = (ws, row) => {
+    row.eachCell((c) => {
+      c.font = { ...(c.font || {}), bold: true };
+      c.border = { top: { style: "double", color: { argb: argb(T.primary, "FF801D5C") } } };
+    });
+  };
+
+  const exportInventoryXLSX = async () => {
+    if (!products.length) return ping("Nothing to export yet");
+    let ExcelJS;
+    try { ExcelJS = await ensureExcel(); }
+    catch (e) { return ping("Need to be online once to prepare spreadsheets"); }
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "Zen Pasabuy";
+    const ws = wb.addWorksheet("Inventory");
+    ws.columns = [
+      { header: "Product", key: "a", width: 26 },
+      { header: "Tier", key: "b", width: 10 },
+      { header: "Date bought", key: "c", width: 13 },
+      { header: "Shop", key: "d", width: 22 },
+      { header: "Bought", key: "e", width: 9 },
+      { header: "Left", key: "f", width: 8 },
+      { header: "Sold", key: "g", width: 8 },
+      { header: "Unit ¥", key: "h", width: 11 },
+      { header: "Cost/pc ₱", key: "i", width: 12 },
+      { header: "Sell/pc ₱", key: "j", width: 12 },
+      { header: "Profit/pc ₱", key: "k", width: 13 },
+      { header: "Margin", key: "l", width: 10 },
+      { header: "Result", key: "m", width: 11 },
+      { header: "Stock value ₱", key: "n", width: 14 },
+    ];
+    styleSheet(ws, ws.columns.length);
+    let i = 0, totStock = 0, totValue = 0, totProfit = 0;
+    products.forEach((p) => {
+      (p.lots || []).forEach((l) => {
+        const profit = p.list - l.unitCost;
+        const margin = l.unitCost > 0 ? profit / l.unitCost : 0;
+        const value = l.remaining * l.unitCost;
+        totStock += l.remaining; totValue += value; totProfit += profit * l.remaining;
+        const row = ws.addRow({
+          a: p.name, b: p.tierName, c: l.date, d: l.store || "—",
+          e: l.qty, f: l.remaining, g: l.qty - l.remaining,
+          h: Math.round(l.unitJpy), i: Math.round(l.unitCost), j: p.list,
+          k: Math.round(profit), l: margin, m: profit < 0 ? "LOSS" : "Profit",
+          n: Math.round(value),
+        });
+        row.getCell("h").numFmt = YEN_FMT;
+        row.getCell("i").numFmt = PESO_FMT;
+        row.getCell("j").numFmt = PESO_FMT;
+        row.getCell("n").numFmt = PESO_FMT;
+        row.getCell("l").numFmt = "0%";
+        paintMoney(row.getCell("k"), profit, PESO_FMT);
+        const res = row.getCell("m");
+        res.font = { bold: true, color: { argb: argb(profit < 0 ? LOSS_HEX : GAIN_HEX) } };
+        res.alignment = { horizontal: "center" };
+        row.getCell("l").font = { color: { argb: argb(profit < 0 ? LOSS_HEX : GAIN_HEX) } };
+        stripe(row, i++);
+      });
+    });
+    const tr = ws.addRow({ a: `TOTALS · ${products.length} product(s)`, f: totStock, k: Math.round(totProfit), n: Math.round(totValue) });
+    tr.getCell("n").numFmt = PESO_FMT;
+    paintMoney(tr.getCell("k"), totProfit, PESO_FMT);
+    totalsRow(ws, tr);
+
+    downloadBlob(`zen-pasabuy-inventory-${today()}.xlsx`, new Blob([await wb.xlsx.writeBuffer()], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+    ping("Inventory spreadsheet exported 🌸");
+  };
+
+  const exportOrdersXLSX = async () => {
+    if (!orders.length) return ping("Nothing to export yet");
+    let ExcelJS;
+    try { ExcelJS = await ensureExcel(); }
+    catch (e) { return ping("Need to be online once to prepare spreadsheets"); }
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "Zen Pasabuy";
+    const ws = wb.addWorksheet("Orders");
+    ws.columns = [
+      { header: "Order date", key: "a", width: 12 },
+      { header: "Customer", key: "b", width: 18 },
+      { header: "Location", key: "c", width: 16 },
+      { header: "Status", key: "d", width: 15 },
+      { header: "Arriving", key: "e", width: 12 },
+      { header: "Product", key: "f", width: 26 },
+      { header: "Qty", key: "g", width: 7 },
+      { header: "Bought", key: "h", width: 9 },
+      { header: "Cost/pc ₱", key: "i", width: 12 },
+      { header: "Sell/pc ₱", key: "j", width: 12 },
+      { header: "Spent ₱", key: "k", width: 12 },
+      { header: "Revenue ₱", key: "l", width: 12 },
+      { header: "Profit ₱", key: "m", width: 12 },
+      { header: "Margin", key: "n", width: 10 },
+      { header: "Result", key: "o", width: 11 },
+    ];
+    styleSheet(ws, ws.columns.length);
+    let i = 0, tSpent = 0, tRev = 0;
+    orders.forEach((o) => {
+      o.lines.forEach((l) => {
+        const lm = lineMath(l);
+        tSpent += lm.spent; tRev += lm.revenue;
+        const row = ws.addRow({
+          a: o.orderDate, b: o.customer, c: o.location || "—", d: PHASE[orderPhase(o)].label,
+          e: o.eta || "—", f: l.name, g: l.qty, h: l.bought ? "Yes" : "No",
+          i: Math.round(l.unitCost), j: Math.round(l.sell), k: Math.round(lm.spent),
+          l: Math.round(lm.revenue), m: Math.round(lm.profit),
+          n: lm.spent > 0 ? lm.profit / lm.spent : 0,
+          o: lm.profit < 0 ? "LOSS" : "Profit",
+        });
+        ["i", "j", "k", "l"].forEach((k) => (row.getCell(k).numFmt = PESO_FMT));
+        row.getCell("n").numFmt = "0%";
+        paintMoney(row.getCell("m"), lm.profit, PESO_FMT);
+        const res = row.getCell("o");
+        res.font = { bold: true, color: { argb: argb(lm.profit < 0 ? LOSS_HEX : GAIN_HEX) } };
+        res.alignment = { horizontal: "center" };
+        row.getCell("n").font = { color: { argb: argb(lm.profit < 0 ? LOSS_HEX : GAIN_HEX) } };
+        if (!l.bought) row.getCell("h").font = { bold: true, color: { argb: argb(LOSS_HEX) } };
+        stripe(row, i++);
+      });
+    });
+    const tProfit = tRev - tSpent;
+    const tr = ws.addRow({
+      a: "TOTALS", b: `${orders.length} order(s)`,
+      k: Math.round(tSpent), l: Math.round(tRev), m: Math.round(tProfit),
+      n: tSpent > 0 ? tProfit / tSpent : 0, o: tProfit < 0 ? "LOSS" : "Profit",
+    });
+    ["k", "l"].forEach((k) => (tr.getCell(k).numFmt = PESO_FMT));
+    tr.getCell("n").numFmt = "0%";
+    paintMoney(tr.getCell("m"), tProfit, PESO_FMT);
+    tr.getCell("o").font = { bold: true, color: { argb: argb(tProfit < 0 ? LOSS_HEX : GAIN_HEX) } };
+    totalsRow(ws, tr);
+
+    downloadBlob(`zen-pasabuy-orders-${today()}.xlsx`, new Blob([await wb.xlsx.writeBuffer()], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+    ping("Orders spreadsheet exported 🌸");
+  };
+
   const exportJSON = () => {
     download(`zen-pasabuy-backup-${today()}.json`, JSON.stringify({ app: "zen-pasabuy", version: APP_VERSION, exportedAt: new Date().toISOString(), settings, products, orders }, null, 2), "application/json");
     setSettings((s) => ({ ...s, lastBackup: new Date().toISOString() }));
@@ -1360,8 +1536,16 @@ function ZenPasabuy({ user, onLogout }) {
               </div>
             )}
 
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button onClick={exportProductsCSV} style={{ ...ghostBtn, color: T.accent }} disabled={!products.length}>⬇ CSV</button>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <div style={{ display: "flex", background: T.paper, border: `1.5px solid ${T.border}`, borderRadius: 999, overflow: "hidden" }}>
+                {[["cards", "Cards"], ["sheet", "Sheet"]].map(([v, name]) => (
+                  <button key={v} onClick={() => setInvView(v)}
+                    style={{ padding: "8px 16px", border: "none", background: invView === v ? T.primary : "transparent", color: invView === v ? "#fff" : T.muted, fontFamily: "'Quicksand', sans-serif", fontWeight: 700, fontSize: 12.5, cursor: "pointer" }}>
+                    {name}
+                  </button>
+                ))}
+              </div>
+              <button onClick={exportInventoryXLSX} style={{ ...ghostBtn, color: T.accent }} disabled={!products.length}>⬇ Excel</button>
               <button onClick={exportJSON} style={{ ...ghostBtn, color: T.accent }}>⬇ Backup (with photos)</button>
               <button onClick={() => backupRef.current?.click()} style={{ ...ghostBtn, color: T.accent }}>⬆ Import</button>
               <input ref={backupRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; if (f) importJSON(f); e.target.value = ""; }} />
@@ -1378,7 +1562,64 @@ function ZenPasabuy({ user, onLogout }) {
               </div>
             )}
 
-            {visibleProducts.map((p) => {
+            {invView === "sheet" && visibleProducts.length > 0 && (() => {
+              const rows = visibleProducts.map((p) => {
+                const stock = productStock(p);
+                const bought = productBought(p);
+                const cost = productAvgCost(p);
+                const profit = p.list - cost;
+                return { p, stock, bought, sold: bought - stock, cost, profit, margin: cost > 0 ? (profit / cost) * 100 : NaN, value: stock * cost };
+              });
+              const tv = rows.reduce((a, r) => a + r.value, 0);
+              const tp = rows.reduce((a, r) => a + r.profit * r.stock, 0);
+              const cellH = { padding: "9px 10px", fontFamily: "'Quicksand', sans-serif", fontSize: 10.5, letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap" };
+              const cell = { padding: "8px 10px", whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` };
+              return (
+                <div style={{ ...card, padding: 0, overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+                  <table style={{ borderCollapse: "collapse", fontSize: 12.5, minWidth: 720 }}>
+                    <thead>
+                      <tr style={{ background: T.primary, color: "#fff" }}>
+                        <th style={{ ...cellH, textAlign: "left", position: "sticky", left: 0, background: T.primary, zIndex: 2 }}>Product</th>
+                        {["Shop", "Stock", "Bought", "Sold", "Cost/pc", "Sell/pc", "Profit/pc", "Margin", "Result", "Stock value"].map((h, k) => (
+                          <th key={h} style={{ ...cellH, textAlign: k < 1 ? "left" : "right" }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((r, idx) => {
+                        const shops = [...new Set((r.p.lots || []).map((l) => l.store).filter(Boolean))];
+                        const bg = idx % 2 ? T.soft : T.paper;
+                        const pc = r.profit < 0 ? DANGER : T.good;
+                        return (
+                          <tr key={r.p.id} onClick={() => setPageId(r.p.id)} style={{ background: bg, cursor: "pointer" }}>
+                            <td style={{ ...cell, fontWeight: 700, position: "sticky", left: 0, background: bg, zIndex: 1 }}>{r.p.name}</td>
+                            <td style={{ ...cell, color: T.muted, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis" }}>{shops.join(", ") || "—"}</td>
+                            <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: r.stock === 0 ? T.pink : T.ink }}>{r.stock}</td>
+                            <td style={{ ...cell, textAlign: "right", color: T.muted }}>{r.bought}</td>
+                            <td style={{ ...cell, textAlign: "right", color: T.muted }}>{r.sold}</td>
+                            <td style={{ ...cell, textAlign: "right" }}>{peso(r.cost)}</td>
+                            <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: T.primary }}>{peso(r.p.list)}</td>
+                            <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: pc }}>{signedPeso(r.profit)}</td>
+                            <td style={{ ...cell, textAlign: "right", color: pc }}>{pct(r.margin)}</td>
+                            <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: pc }}>{r.profit < 0 ? "LOSS" : "Profit"}</td>
+                            <td style={{ ...cell, textAlign: "right" }}>{peso(r.value)}</td>
+                          </tr>
+                        );
+                      })}
+                      <tr style={{ background: T.bg, borderTop: `2px solid ${T.primary}` }}>
+                        <td style={{ ...cell, fontWeight: 700, position: "sticky", left: 0, background: T.bg }}>Totals · {rows.length}</td>
+                        <td style={cell} colSpan={6} />
+                        <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: tp < 0 ? DANGER : T.good }}>{signedPeso(tp)}</td>
+                        <td style={cell} colSpan={2} />
+                        <td style={{ ...cell, textAlign: "right", fontWeight: 700 }}>{peso(tv)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
+
+            {invView === "cards" && visibleProducts.map((p) => {
               const stock = productStock(p);
               const bought = productBought(p);
               const lots = [...(p.lots || [])].sort((a, b) => String(a.date).localeCompare(String(b.date)) || a.id - b.id);
@@ -1452,7 +1693,7 @@ function ZenPasabuy({ user, onLogout }) {
               <button onClick={() => setShowDraft(!showDraft)} style={{ ...primaryBtn, flex: 1, padding: 11 }}>
                 {showDraft ? "Close form" : "+ Take a customer order"}
               </button>
-              <button onClick={exportOrdersCSV} style={{ ...ghostBtn, color: T.accent }} disabled={!orders.length}>⬇ CSV</button>
+              <button onClick={exportOrdersXLSX} style={{ ...ghostBtn, color: T.accent }} disabled={!orders.length}>⬇ Excel</button>
             </div>
 
             {/* search + phase filter */}

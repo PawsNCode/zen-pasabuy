@@ -3,7 +3,7 @@
      • app shell (index.html)  → network first, fall back to cache when offline
      • icons, manifest, CDN JS → cache first (they rarely change; version-tagged)
    The in-app "Refresh to latest version" button clears these caches. */
-const CACHE = "zen-pasabuy-v7.4.0";
+const CACHE = "zen-pasabuy-v7.5.0";
 
 const SHELL = [
   "./",
@@ -18,6 +18,7 @@ const SHELL = [
   "https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js",
   "https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js",
   "https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js",
+  "https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js",
 ];
 
 self.addEventListener("install", (e) => {
