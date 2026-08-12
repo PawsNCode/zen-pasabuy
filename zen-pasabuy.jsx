@@ -95,8 +95,8 @@ async function sha256Hex(text) {
 const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "7.9.2";
-const APP_UPDATED = "Aug 12, 2026 · 9:44 PM PHT";
+const APP_VERSION = "7.9.3";
+const APP_UPDATED = "Aug 12, 2026 · 9:53 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -349,6 +349,7 @@ function ZenPasabuy({ user, onLogout }) {
   const [pPhoto, setPPhoto] = useState(null);
   const [tierId, setTierId] = useState("basic");
   const [showMath, setShowMath] = useState(false);
+  const [showBoxMath, setShowBoxMath] = useState(false);
   const [sourceId, setSourceId] = useState("nearby");
   const [shipId, setShipId] = useState("s");
 
@@ -2626,7 +2627,66 @@ function ZenPasabuy({ user, onLogout }) {
               </div>
               <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 12, background: T.bg, border: `1px solid ${T.border}`, fontSize: 12.5 }}>
                 That works out to <b style={{ color: T.primary }}>{yen(Math.round(yenPerLitre(dBox)))}</b> per litre of box space
-                <span style={{ color: T.muted }}> ({M(yenPerLitre(dBox) * rate)} per litre)</span>.
+                <span style={{ color: T.muted }}> ({peso(yenPerLitre(dBox) * rate)} per litre)</span>.
+              </div>
+
+              {/* collapsible: how that ¥ per litre was reached */}
+              <div style={{ marginTop: 10, border: `1px solid ${T.border}`, borderRadius: 14, overflow: "hidden" }}>
+                <button onClick={() => setShowBoxMath(!showBoxMath)}
+                  style={{ width: "100%", padding: "11px 13px", border: "none", background: "transparent", color: T.ink, fontFamily: "'Quicksand', sans-serif", fontWeight: 700, fontSize: 13, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, textAlign: "left" }}>
+                  <span>🧮 {showBoxMath ? "Hide" : "Show"} how this was worked out</span>
+                  <span style={{ color: T.muted, fontSize: 12, flexShrink: 0 }}>{showBoxMath ? "▲" : "▼"}</span>
+                </button>
+                {showBoxMath && (() => {
+                  const cost = Number(dBox?.costJpy) || 0;
+                  const cap = Number(dBox?.liters) || 0;
+                  const fill = Number(dBox?.fillPct) || 0;
+                  const usable = cap * (fill / 100);
+                  const perL = yenPerLitre(dBox);
+                  const sample = (dShipping || []).find((x) => Number(x.liters) > 0);
+                  const BStep = ({ n, title, formula, value, note }) => (
+                    <div style={{ padding: "10px 13px", borderTop: `1px solid ${T.border}` }}>
+                      <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                        <span style={{ width: 20, height: 20, borderRadius: 999, background: T.primary, color: "#fff", fontSize: 11, fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{n}</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 700, fontSize: 12.5 }}>{title}</div>
+                          <code style={{ display: "block", fontSize: 11.5, color: T.muted, marginTop: 3, wordBreak: "break-word", fontFamily: "ui-monospace, Menlo, monospace" }}>{formula}</code>
+                          {note && <div style={{ fontSize: 10.5, color: T.muted, marginTop: 3 }}>{note}</div>}
+                        </div>
+                        <b style={{ color: T.primary, fontSize: 13, whiteSpace: "nowrap" }}>{value}</b>
+                      </div>
+                    </div>
+                  );
+                  return (
+                    <div style={{ paddingBottom: 6 }}>
+                      <BStep n="1" title="Space you can actually fill"
+                        formula={`${cap} L × ${fill}% = ${usable.toFixed(1)} L`}
+                        value={`${usable.toFixed(1)} L`}
+                        note="the rest is air between the items — you still pay to ship it" />
+                      <BStep n="2" title="Cost of one usable litre"
+                        formula={`${yen(cost)} ÷ ${usable.toFixed(1)} L = ${yen(Math.round(perL))}`}
+                        value={yen(Math.round(perL))}
+                        note={`${peso(perL * rate)} at today's rate`} />
+                      <BStep n="3" title="What one size costs"
+                        formula={sample ? `${sample.name}: ${sample.liters} L × ${yen(Math.round(perL))} = ${yen(Math.round(Number(sample.liters) * perL))}` : "litres × cost per litre"}
+                        value={sample ? yen(Math.round(Number(sample.liters) * perL)) : "—"}
+                        note="every size with litres set is worked out the same way" />
+                      <BStep n="4" title="Where it ends up"
+                        formula="landed + buffer + sourcing + box share = true cost"
+                        value="Price it"
+                        note="so the freight is already inside the price you quote the customer" />
+                      <div style={{ padding: "10px 13px", borderTop: `1px solid ${T.border}` }}>
+                        <button onClick={recalcShipping} style={{ ...primaryBtn, width: "100%", padding: 11, fontSize: 13.5 }}>
+                          ↻ Apply {yen(Math.round(perL))}/L to my shipping sizes
+                        </button>
+                        <div style={{ fontSize: 10.5, color: T.muted, marginTop: 7, lineHeight: 1.45 }}>
+                          Rewrites the ¥ on every size that has litres set. Sizes on 0 L stay free.
+                          The change lands in the card below as unsaved — press Save changes there to keep it.
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
 
@@ -2647,7 +2707,7 @@ function ZenPasabuy({ user, onLogout }) {
                     <button onClick={() => removeShipping(i)} title="Remove size" style={{ border: "none", background: "transparent", color: T.pink, fontSize: 16, cursor: "pointer" }}>✕</button>
                   </div>
                   <input value={sh.note || ""} onChange={(e) => updShipping(i, { note: e.target.value })} placeholder="What fits in this size" style={{ ...inputStyle, marginTop: 8, padding: "8px 12px", fontSize: 12.5, fontWeight: 500 }} />
-                  <div style={{ fontSize: 10.5, color: T.muted, marginTop: 6 }}>≈{M(shipPhp(sh))} per item at today's rate</div>
+                  <div style={{ fontSize: 10.5, color: T.muted, marginTop: 6 }}>≈{peso(shipPhp(sh))} per item at today's rate</div>
                 </div>
               ))}
               <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
