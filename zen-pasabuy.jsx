@@ -95,8 +95,8 @@ async function sha256Hex(text) {
 const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "7.9.5";
-const APP_UPDATED = "Aug 13, 2026 · 4:12 PM PHT";
+const APP_VERSION = "7.9.6";
+const APP_UPDATED = "Aug 13, 2026 · 4:15 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -1049,7 +1049,7 @@ function ZenPasabuy({ user, onLogout }) {
   const exportJSON = () => {
     download(`zen-pasabuy-backup-${today()}.json`, JSON.stringify({ app: "zen-pasabuy", version: APP_VERSION, exportedAt: new Date().toISOString(), settings, products, orders }, null, 2), "application/json");
     setSettings((s) => ({ ...s, lastBackup: new Date().toISOString() }));
-    ping("Backup exported — photos included");
+    ping(`Backed up — ${products.length} product(s), ${orders.length} order(s), photos included`);
   };
   const openBackupPicker = () => {
     const el = backupRef.current;
@@ -1066,27 +1066,28 @@ function ZenPasabuy({ user, onLogout }) {
         if (!d || typeof d !== "object" || (!Array.isArray(d.products) && !Array.isArray(d.orders) && !d.settings)) {
           return ping("That doesn't look like a Zen Pasabuy backup");
         }
-        let added = 0;
+        let addedP = 0, addedO = 0;
         if (Array.isArray(d.products)) {
           const have = new Set(products.map((p) => p.id));
           const fresh = d.products.filter((p) => p && p.id && !have.has(p.id));
-          added += fresh.length;
-          setProducts([...fresh, ...products]);
+          addedP = fresh.length;
+          if (fresh.length) setProducts([...fresh, ...products]);
         }
         if (Array.isArray(d.orders)) {
           const have = new Set(orders.map((o) => o.id));
           const fresh = d.orders
             .filter((o) => o && o.id && !have.has(o.id))
             .map((o) => ({ ...o, status: o.status || (o.paid ? "completed" : "open"), lines: (o.lines || []).map((l) => ({ ...l, bought: l.bought != null ? l.bought : true })) }));
-          added += fresh.length;
-          setOrders([...fresh, ...orders]);
+          addedO = fresh.length;
+          if (fresh.length) setOrders([...fresh, ...orders]);
         }
+        const added = addedP + addedO;
         if (d.settings) setSettings((s) => {
           const merged = { ...s, ...d.settings, theme: { ...SWEETIES_THEME, ...(d.settings.theme || s.theme) } };
           merged.sourcing = (merged.sourcing || []).map((x) => (x.feeJpy != null ? x : { ...x, feeJpy: Math.round((x.fee || 0) / 0.385) }));
           return merged;
         });
-        ping(added ? `Imported ${added} record(s) — photos restored` : "File read — nothing new to add");
+        ping(added ? `Imported ${addedP} product(s) and ${addedO} order(s) — photos restored` : "File read — nothing new to add");
       } catch (e) { ping("That file couldn't be read — use a backup exported from this app."); }
     };
     reader.readAsText(file);
@@ -1812,7 +1813,7 @@ function ZenPasabuy({ user, onLogout }) {
                 ))}
               </div>
               <button onClick={exportInventoryXLSX} style={{ ...ghostBtn, color: T.accent }} disabled={!products.length}>⬇ Excel</button>
-              <button onClick={exportJSON} style={{ ...ghostBtn, color: T.accent }}>⬇ Backup (with photos)</button>
+              <button onClick={exportJSON} style={{ ...ghostBtn, color: T.accent }}>⬇ Backup (all data)</button>
               <button onClick={openBackupPicker} style={{ ...ghostBtn, color: T.accent }}>⬆ Import</button>
             </div>
 
@@ -1918,7 +1919,7 @@ function ZenPasabuy({ user, onLogout }) {
                 ["Switch between Cards and Sheet", "Cards are easy to skim on a phone. Sheet lays everything out in columns — cost, sell price, profit, margin — and scrolls sideways with the product name pinned."],
                 ["Tap any product to open its page", "Its page shows every purchase batch, every sale, the photo, and a running history."],
                 ["Restock from Price it", "To add more pieces, go to Price it and choose Restock — or use the button on the product's own page."],
-                ["Keep a backup", "Excel gives you a readable sheet. Backup (with photos) gives you the full JSON file that can be imported into another phone."],
+                ["Keep a backup", "Excel gives you a readable sheet. Backup (all data) gives you the full JSON file — inventory, photos, orders and settings together — and that's the one that can be imported into another phone."],
               ]}
               tips={[
                 "Stock counts fall by themselves as orders are dispatched — the oldest batch always sells first, so your costs stay honest.",
@@ -1973,6 +1974,14 @@ function ZenPasabuy({ user, onLogout }) {
                 {showDraft ? "Close form" : "+ Take a customer order"}
               </button>
               <button onClick={exportOrdersXLSX} style={{ ...ghostBtn, color: T.accent }} disabled={!orders.length}>⬇ Excel</button>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button onClick={exportJSON} style={{ ...ghostBtn, flex: 1, color: T.accent }}>⬇ Backup (all data)</button>
+              <button onClick={openBackupPicker} style={{ ...ghostBtn, flex: 1, color: T.accent }}>⬆ Import backup</button>
+            </div>
+            <div style={{ fontSize: 11, color: T.muted, marginTop: -4 }}>
+              One JSON file holds your orders, inventory, photos and settings — Excel is a readable copy, this is the one that restores.
             </div>
 
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -2516,6 +2525,7 @@ function ZenPasabuy({ user, onLogout }) {
                 )],
                 ["Mark it dispatched, then received and paid", "Stock comes off your inventory on dispatch, and profit is counted once the order is closed."],
                 ["Search and filter", "Find any order by customer, product or location, and narrow by status when you're chasing what's still open."],
+                ["Back up your orders", "Excel gives you a readable sheet of them. Backup (all data) writes the JSON file that actually restores — your orders travel in the same file as your inventory, photos and settings, so one file is all you need to move to a new phone."],
               ]}
               tips={[
                 "Any order can still be edited after dispatch or completion if something needs correcting.",
