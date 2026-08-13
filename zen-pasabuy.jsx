@@ -134,8 +134,8 @@ function friendlyAuthError(e) {
 const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "8.0.1";
-const APP_UPDATED = "Aug 13, 2026 · 7:05 PM PHT";
+const APP_VERSION = "8.0.2";
+const APP_UPDATED = "Aug 13, 2026 · 7:35 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -3184,7 +3184,7 @@ function LoginScreen({ linkError }) {
 }
 
 /* Shown when someone arrives from a password-reset email. */
-function SetPasswordScreen({ onDone }) {
+function SetPasswordScreen({ onDone, invited }) {
   const T = SWEETIES_THEME;
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
@@ -3206,8 +3206,14 @@ function SetPasswordScreen({ onDone }) {
 
   return (
     <AuthShell>
-      <div style={{ fontSize: 14, fontWeight: 700, color: T.primary, marginBottom: 4 }}>Set a new password</div>
-      <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 12 }}>Pick something you'll remember. At least 8 characters.</div>
+      <div style={{ fontSize: 14, fontWeight: 700, color: T.primary, marginBottom: 4 }}>
+        {invited ? "Welcome to Zen Pasabuy" : "Set a new password"}
+      </div>
+      <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 12, lineHeight: 1.55 }}>
+        {invited
+          ? "Choose a password and you're in. Nobody else ever sees it, not even me."
+          : "Pick something you'll remember. At least 8 characters."}
+      </div>
       <div style={{ display: "grid", gap: 10 }}>
         <input value={pw} onChange={(e) => setPw(e.target.value)} placeholder="New password" type="password" autoComplete="new-password" style={authInput()} />
         <input value={pw2} onChange={(e) => setPw2(e.target.value)} onKeyDown={(e) => e.key === "Enter" && save()} placeholder="Type it again" type="password" autoComplete="new-password" style={authInput()} />
@@ -3265,6 +3271,7 @@ function ZenPasabuyRoot() {
   const [profile, setProfile] = useState(null);
   const [banner, setBanner] = useState(true);
   const [linkError, setLinkError] = useState("");
+  const [invited, setInvited] = useState(false);
 
   const loadProfile = async (client, session) => {
     /* Try the server, fall back to the cached copy so the app still opens offline. */
@@ -3311,13 +3318,15 @@ function ZenPasabuyRoot() {
 
     /* Three ways to know a reset is happening, because no single one is reliable
        across email clients, devices and Supabase flow types. */
-    let recovering = pick("type") === "recovery";
+    const linkType = pick("type");
+    let recovering = linkType === "recovery" || linkType === "invite" || linkType === "signup";
+    const invited = linkType === "invite" || linkType === "signup";
     try { if (localStorage.getItem(RECOVERY_FLAG) === "1") recovering = true; } catch (e) { /* ignore */ }
 
     const settle = async (session) => {
       if (cancelled) return;
       if (!session) { setProfile(null); setPhase("out"); return; }
-      if (recovering) { setPhase("recover"); return; }
+      if (recovering) { setInvited(invited); setPhase("recover"); return; }
       const row = await loadProfile(client, session);
       if (cancelled) return;
       setProfile(row);
@@ -3353,7 +3362,7 @@ function ZenPasabuyRoot() {
   };
 
   if (phase === "loading") return <div style={{ minHeight: "100vh", background: SWEETIES_THEME.bg }} />;
-  if (phase === "recover") return <SetPasswordScreen onDone={afterPasswordSet} />;
+  if (phase === "recover") return <SetPasswordScreen invited={invited} onDone={afterPasswordSet} />;
   if (phase === "out") return <LoginScreen linkError={linkError} />;
   if (phase === "expired") return <ExpiredScreen profile={profile} onSignOut={handleSignOut} />;
 
