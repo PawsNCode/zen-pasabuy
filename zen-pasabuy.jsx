@@ -112,7 +112,7 @@ function appUrl() {
 function accessState(profile) {
   if (!profile) return { ok: false, state: "noprofile", days: 0 };
   if (profile.owner || profile.plan === "lifetime") return { ok: true, state: "ok", days: null };
-  if (!profile.paid_until) return { ok: false, state: "expired", days: 0 };
+  if (!profile.paid_until) return { ok: false, state: "noplan", days: 0 };
   const end = new Date(profile.paid_until + "T23:59:59+08:00");
   const days = Math.ceil((end - new Date()) / 86400000);
   if (days > 14) return { ok: true, state: "ok", days };
@@ -134,8 +134,8 @@ function friendlyAuthError(e) {
 const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "8.0.2";
-const APP_UPDATED = "Aug 13, 2026 · 7:35 PM PHT";
+const APP_VERSION = "8.0.3";
+const APP_UPDATED = "Aug 13, 2026 · 8:10 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -3227,6 +3227,8 @@ function SetPasswordScreen({ onDone, invited }) {
 /* Shown when a yearly plan has run past its grace period. */
 function ExpiredScreen({ profile, onSignOut }) {
   const T = SWEETIES_THEME;
+  const state = accessState(profile).state;
+  const fresh = state === "noplan" || state === "noprofile";
   const key = profile && profile.owner ? LEGACY_KEY : `${LEGACY_KEY}:${(profile && profile.slug) || "guest"}`;
 
   const exportData = () => {
@@ -3238,15 +3240,21 @@ function ExpiredScreen({ profile, onSignOut }) {
 
   return (
     <AuthShell note={<>v{APP_VERSION} 🌸</>}>
-      <div style={{ fontSize: 15, fontWeight: 700, color: T.primary }}>Your year has ended</div>
+      <div style={{ fontSize: 15, fontWeight: 700, color: T.primary }}>
+        {fresh ? "Almost there" : "Your year has ended"}
+      </div>
       <div style={{ fontSize: 12.5, color: T.muted, marginTop: 8, lineHeight: 1.6 }}>
-        Message <b style={{ color: T.ink }}>hello@zenpasabuy.com</b> to renew and I'll switch you back on, usually the same day.
+        {fresh
+          ? <>Your sign in worked, but there's no plan on this account yet. Message <b style={{ color: T.ink }}>hello@zenpasabuy.com</b> with your payment receipt and I'll switch it on, usually within the day.</>
+          : <>Message <b style={{ color: T.ink }}>hello@zenpasabuy.com</b> to renew and I'll switch you back on, usually the same day.</>}
       </div>
-      <div style={{ fontSize: 12.5, color: T.muted, marginTop: 10, lineHeight: 1.6 }}>
-        Nothing has been deleted. Every order, product and photo is still on this device, and you can take a full backup right now.
-      </div>
-      <button onClick={exportData} style={{ ...authBtn(), width: "100%", marginTop: 14 }}>Download my data</button>
-      <button onClick={onSignOut} style={{ width: "100%", marginTop: 8, padding: 12, borderRadius: 14, border: `1.5px solid ${T.border}`, background: "transparent", color: T.accent, fontFamily: "'Quicksand', sans-serif", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>Sign out</button>
+      {!fresh && (
+        <div style={{ fontSize: 12.5, color: T.muted, marginTop: 10, lineHeight: 1.6 }}>
+          Nothing has been deleted. Every order, product and photo is still on this device, and you can take a full backup right now.
+        </div>
+      )}
+      {!fresh && <button onClick={exportData} style={{ ...authBtn(), width: "100%", marginTop: 14 }}>Download my data</button>}
+      <button onClick={onSignOut} style={{ width: "100%", marginTop: fresh ? 14 : 8, padding: 12, borderRadius: 14, border: `1.5px solid ${T.border}`, background: "transparent", color: T.accent, fontFamily: "'Quicksand', sans-serif", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>Sign out</button>
     </AuthShell>
   );
 }
