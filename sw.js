@@ -3,7 +3,7 @@
      • app shell (index.html)  → network first, fall back to cache when offline
      • icons, manifest, CDN JS → cache first (they rarely change; version-tagged)
    The in-app "Refresh to latest version" button clears these caches. */
-const CACHE = "zen-pasabuy-v7.9.6";
+const CACHE = "zen-pasabuy-v8.0.0";
 
 const SHELL = [
   "./",
@@ -19,6 +19,7 @@ const SHELL = [
   "https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js",
   "https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js",
   "https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js",
+  "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.58.0/dist/umd/supabase.js",
 ];
 
 self.addEventListener("install", (e) => {
@@ -40,8 +41,12 @@ self.addEventListener("fetch", (e) => {
   if (req.method !== "GET") return;
 
   const url = new URL(req.url);
-  // never cache the exchange-rate call — it must be fresh or fail
+  // never cache the exchange-rate call, it must be fresh or fail
   if (url.hostname.includes("er-api.com")) return;
+
+  // never cache anything from Supabase. A stale profile row would keep an
+  // expired account working, or lock a renewed one out.
+  if (url.hostname.includes("supabase.co")) return;
 
   const isShellDoc = req.mode === "navigate" || url.pathname.endsWith("/") || url.pathname.endsWith("index.html");
 
@@ -62,7 +67,7 @@ self.addEventListener("fetch", (e) => {
     caches.match(req).then((hit) =>
       hit ||
       fetch(req).then((res) => {
-        if (res && res.status === 200 && (url.origin === self.location.origin || url.hostname.includes("cdnjs"))) {
+        if (res && res.status === 200 && (url.origin === self.location.origin || url.hostname.includes("cdnjs") || url.hostname.includes("jsdelivr"))) {
           const copy = res.clone();
           caches.open(CACHE).then((c) => c.put(req, copy));
         }
