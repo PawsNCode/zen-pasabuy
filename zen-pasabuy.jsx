@@ -95,8 +95,8 @@ async function sha256Hex(text) {
 const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "7.9.4";
-const APP_UPDATED = "Aug 12, 2026 · 9:56 PM PHT";
+const APP_VERSION = "7.9.5";
+const APP_UPDATED = "Aug 13, 2026 · 4:12 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -1051,11 +1051,21 @@ function ZenPasabuy({ user, onLogout }) {
     setSettings((s) => ({ ...s, lastBackup: new Date().toISOString() }));
     ping("Backup exported — photos included");
   };
+  const openBackupPicker = () => {
+    const el = backupRef.current;
+    if (!el) return ping("Couldn't open the file picker — refresh the app and try again");
+    el.value = "";
+    el.click();
+  };
   const importJSON = (file) => {
     const reader = new FileReader();
+    reader.onerror = () => ping("That file couldn't be opened — try downloading it again");
     reader.onload = () => {
       try {
         const d = JSON.parse(reader.result);
+        if (!d || typeof d !== "object" || (!Array.isArray(d.products) && !Array.isArray(d.orders) && !d.settings)) {
+          return ping("That doesn't look like a Zen Pasabuy backup");
+        }
         let added = 0;
         if (Array.isArray(d.products)) {
           const have = new Set(products.map((p) => p.id));
@@ -1298,6 +1308,11 @@ function ZenPasabuy({ user, onLogout }) {
       `}</style>
 
       <div className="zp-shell" style={{ maxWidth: 560, margin: "0 auto", padding: "22px 16px 60px" }}>
+        {/* one hidden picker for the whole app — it must live outside the tabs,
+            or the ref is null on whichever page isn't currently rendered */}
+        <input ref={backupRef} type="file" accept=".json,application/json,.txt" style={{ display: "none" }}
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) importJSON(f); e.target.value = ""; }} />
+
         <datalist id="zp-shops">{memShops.map((v) => <option key={v} value={v} />)}</datalist>
         <datalist id="zp-locations">{memLocations.map((v) => <option key={v} value={v} />)}</datalist>
         <datalist id="zp-customers">{memCustomers.map((v) => <option key={v} value={v} />)}</datalist>
@@ -1798,8 +1813,7 @@ function ZenPasabuy({ user, onLogout }) {
               </div>
               <button onClick={exportInventoryXLSX} style={{ ...ghostBtn, color: T.accent }} disabled={!products.length}>⬇ Excel</button>
               <button onClick={exportJSON} style={{ ...ghostBtn, color: T.accent }}>⬇ Backup (with photos)</button>
-              <button onClick={() => backupRef.current?.click()} style={{ ...ghostBtn, color: T.accent }}>⬆ Import</button>
-              <input ref={backupRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; if (f) importJSON(f); e.target.value = ""; }} />
+              <button onClick={openBackupPicker} style={{ ...ghostBtn, color: T.accent }}>⬆ Import</button>
             </div>
 
             {products.length === 0 && (
@@ -2898,7 +2912,7 @@ function ZenPasabuy({ user, onLogout }) {
               <span style={label}>Backup</span>
               <div style={{ display: "flex", gap: 8 }}>
                 <button onClick={exportJSON} style={{ ...ghostBtn, flex: 1, color: T.accent }}>⬇ Export everything</button>
-                <button onClick={() => backupRef.current?.click()} style={{ ...ghostBtn, flex: 1, color: T.accent }}>⬆ Import backup</button>
+                <button onClick={openBackupPicker} style={{ ...ghostBtn, flex: 1, color: T.accent }}>⬆ Import backup</button>
               </div>
               <div style={{ fontSize: 12, color: backupDue ? T.accent : T.muted, marginTop: 10, fontWeight: backupDue ? 700 : 500 }}>
                 Last backup: {lastBackupLabel}{daysSinceBackup !== null ? ` · ${daysSinceBackup} day(s) ago` : ""}

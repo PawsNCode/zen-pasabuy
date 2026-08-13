@@ -3,7 +3,7 @@
      • app shell (index.html)  → network first, fall back to cache when offline
      • icons, manifest, CDN JS → cache first (they rarely change; version-tagged)
    The in-app "Refresh to latest version" button clears these caches. */
-const CACHE = "zen-pasabuy-v7.9.4";
+const CACHE = "zen-pasabuy-v7.9.5";
 
 const SHELL = [
   "./",
