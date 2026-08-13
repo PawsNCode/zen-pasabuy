@@ -87,6 +87,7 @@ const SUPABASE_URL = "https://jecrnyxeismboxbxwhlf.supabase.co";
 const SUPABASE_KEY = "sb_publishable_gz9J0Se8zhYgmxjP78MgUQ_78fUrVoV";
 
 const PROFILE_CACHE = "zp-profile";   /* lets the app open with no signal */
+const RECOVERY_FLAG = "zp-recovering"; /* survives the round trip to the reset email */
 const GRACE_DAYS = 7;                 /* days after paid_until the app still opens */
 
 let _sbClient = null;
@@ -94,7 +95,9 @@ function sb() {
   if (_sbClient) return _sbClient;
   if (!window.supabase || !window.supabase.createClient) return null;
   _sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
-    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: "pkce" },
+    /* implicit, not pkce: a reset link must work even when it's opened on a
+       different device from the one that asked for it */
+    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: "implicit" },
   });
   return _sbClient;
 }
@@ -131,8 +134,8 @@ function friendlyAuthError(e) {
 const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "8.0.0";
-const APP_UPDATED = "Aug 13, 2026 · 6:20 PM PHT";
+const APP_VERSION = "8.0.1";
+const APP_UPDATED = "Aug 13, 2026 · 7:05 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -3090,12 +3093,12 @@ const linkBtn = () => ({
   fontSize: 12, cursor: "pointer", padding: 0, fontFamily: "'Quicksand', sans-serif", textDecoration: "underline",
 });
 
-function LoginScreen() {
+function LoginScreen({ linkError }) {
   const T = SWEETIES_THEME;
   const [mode, setMode] = useState("in");      /* in | forgot | sent */
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
-  const [err, setErr] = useState("");
+  const [err, setErr] = useState(linkError || "");
   const [busy, setBusy] = useState(false);
 
   const signIn = async () => {
@@ -3119,7 +3122,10 @@ function LoginScreen() {
     setBusy(true);
     const { error } = await client.auth.resetPasswordForEmail(e, { redirectTo: appUrl() });
     if (error) setErr(friendlyAuthError(error));
-    else setMode("sent");
+    else {
+      try { localStorage.setItem(RECOVERY_FLAG, "1"); } catch (x) { /* private mode */ }
+      setMode("sent");
+    }
     setBusy(false);
   };
 
@@ -3258,6 +3264,7 @@ function ZenPasabuyRoot() {
   const [phase, setPhase] = useState("loading");   /* loading | out | recover | in | expired */
   const [profile, setProfile] = useState(null);
   const [banner, setBanner] = useState(true);
+  const [linkError, setLinkError] = useState("");
 
   const loadProfile = async (client, session) => {
     /* Try the server, fall back to the cached copy so the app still opens offline. */
@@ -3288,8 +3295,29 @@ function ZenPasabuyRoot() {
 
     let cancelled = false;
 
+    /* Whatever the email link left behind, read it before anything clears it. */
+    const hash = new URLSearchParams(String(window.location.hash || "").replace(/^#/, ""));
+    const query = new URLSearchParams(window.location.search || "");
+    const pick = (k) => hash.get(k) || query.get(k);
+
+    const linkProblem = pick("error_description") || pick("error");
+    if (linkProblem) {
+      const msg = String(linkProblem).replace(/\+/g, " ");
+      setLinkError(/expired|invalid/i.test(msg)
+        ? "That reset link has expired or was already used. Ask for a new one."
+        : msg);
+      try { localStorage.removeItem(RECOVERY_FLAG); } catch (e) { /* ignore */ }
+    }
+
+    /* Three ways to know a reset is happening, because no single one is reliable
+       across email clients, devices and Supabase flow types. */
+    let recovering = pick("type") === "recovery";
+    try { if (localStorage.getItem(RECOVERY_FLAG) === "1") recovering = true; } catch (e) { /* ignore */ }
+
     const settle = async (session) => {
-      if (!session) { if (!cancelled) { setProfile(null); setPhase("out"); } return; }
+      if (cancelled) return;
+      if (!session) { setProfile(null); setPhase("out"); return; }
+      if (recovering) { setPhase("recover"); return; }
       const row = await loadProfile(client, session);
       if (cancelled) return;
       setProfile(row);
@@ -3297,39 +3325,36 @@ function ZenPasabuyRoot() {
     };
 
     const { data: sub } = client.auth.onAuthStateChange((event, session) => {
-      if (event === "PASSWORD_RECOVERY") { setPhase("recover"); return; }
+      if (event === "PASSWORD_RECOVERY") {
+        recovering = true;
+        try { localStorage.setItem(RECOVERY_FLAG, "1"); } catch (e) { /* ignore */ }
+      }
       if (event === "SIGNED_OUT") { setProfile(null); setPhase("out"); return; }
       settle(session);
     });
 
-    client.auth.getSession().then(({ data }) => {
-      /* A recovery link puts type=recovery in the URL fragment. */
-      if (/type=recovery/.test(window.location.hash) || /type=recovery/.test(window.location.search)) {
-        setPhase("recover");
-        return;
-      }
-      settle(data && data.session);
-    });
+    client.auth.getSession().then(({ data }) => settle(data && data.session));
 
     return () => { cancelled = true; if (sub && sub.subscription) sub.subscription.unsubscribe(); };
   }, []);
 
   const handleSignOut = async () => {
     const client = sb();
-    try { localStorage.removeItem(PROFILE_CACHE); } catch (e) { /* ignore */ }
+    try { localStorage.removeItem(PROFILE_CACHE); localStorage.removeItem(RECOVERY_FLAG); } catch (e) { /* ignore */ }
     if (client) await client.auth.signOut();
     setProfile(null);
     setPhase("out");
   };
 
   const afterPasswordSet = () => {
+    try { localStorage.removeItem(RECOVERY_FLAG); } catch (e) { /* ignore */ }
     try { history.replaceState(null, "", appUrl()); } catch (e) { /* ignore */ }
     window.location.reload();
   };
 
   if (phase === "loading") return <div style={{ minHeight: "100vh", background: SWEETIES_THEME.bg }} />;
   if (phase === "recover") return <SetPasswordScreen onDone={afterPasswordSet} />;
-  if (phase === "out") return <LoginScreen />;
+  if (phase === "out") return <LoginScreen linkError={linkError} />;
   if (phase === "expired") return <ExpiredScreen profile={profile} onSignOut={handleSignOut} />;
 
   const access = accessState(profile);
