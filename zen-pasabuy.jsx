@@ -74,29 +74,65 @@ const PRICE_LEVEL = {
 
 const DANGER = "#d64545"; /* losses always show in red, in every theme */
 
-/* ── accounts ──────────────────────────────────────────────────────────────
-   Passwords are stored as SHA-256 hashes of `PW_SALT:password`, never as
-   plain text. Add a tester by generating a hash in Set-up → Accounts
-   (owner only) and pasting a new line into this list.
-   Logins:  niz / 6348  ·  fujidemands / 1234
-──────────────────────────────────────────────────────────────────────────── */
-const PW_SALT = "zen-pasabuy-2026";
-const USERS = [
-  { u: "niz", name: "Niz", owner: true, h: "3c6aca2e5073d0823c8d283c9569752e63428a01942267669583b628aa519ad3" },
-  { u: "fujidemands", name: "Fuji Demands", h: "16470cce93cc44987ab099bf008695666909b65eb3ed67dfcdcf260f46922225" },
-];
-const SESSION_KEY = "zp-session";
+/* ── accounts (Supabase) ───────────────────────────────────────────────────
+   Accounts no longer live in this file. They live in Supabase, and are made
+   by hand once a payment is confirmed:
+     Supabase dashboard → Authentication → Users → Add user
+   then set their row in the `profiles` table (slug, plan, paid_until).
 
-async function sha256Hex(text) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+   The publishable key below is meant to be public; every visitor's browser
+   can read it. Row Level Security is what actually protects the data.
+──────────────────────────────────────────────────────────────────────────── */
+const SUPABASE_URL = "https://jecrnyxeismboxbxwhlf.supabase.co";
+const SUPABASE_KEY = "sb_publishable_gz9J0Se8zhYgmxjP78MgUQ_78fUrVoV";
+
+const PROFILE_CACHE = "zp-profile";   /* lets the app open with no signal */
+const GRACE_DAYS = 7;                 /* days after paid_until the app still opens */
+
+let _sbClient = null;
+function sb() {
+  if (_sbClient) return _sbClient;
+  if (!window.supabase || !window.supabase.createClient) return null;
+  _sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: "pkce" },
+  });
+  return _sbClient;
+}
+
+/* Where a password-reset link should land. Add this exact URL to
+   Supabase → Authentication → URL Configuration → Redirect URLs. */
+function appUrl() {
+  return window.location.origin + window.location.pathname;
+}
+
+/* Turn a profile row into a plain access decision. */
+function accessState(profile) {
+  if (!profile) return { ok: false, state: "noprofile", days: 0 };
+  if (profile.owner || profile.plan === "lifetime") return { ok: true, state: "ok", days: null };
+  if (!profile.paid_until) return { ok: false, state: "expired", days: 0 };
+  const end = new Date(profile.paid_until + "T23:59:59+08:00");
+  const days = Math.ceil((end - new Date()) / 86400000);
+  if (days > 14) return { ok: true, state: "ok", days };
+  if (days >= 0) return { ok: true, state: "ending", days };
+  if (days >= -GRACE_DAYS) return { ok: true, state: "grace", days };
+  return { ok: false, state: "expired", days };
+}
+
+function friendlyAuthError(e) {
+  const m = ((e && e.message) || "").toLowerCase();
+  if (m.includes("invalid login")) return "That email and password don't match.";
+  if (m.includes("email not confirmed")) return "This account hasn't been confirmed yet. Message Niz.";
+  if (m.includes("rate limit") || m.includes("too many")) return "Too many tries. Wait a minute and try again.";
+  if (m.includes("failed to fetch") || m.includes("network")) return "No connection. Check your internet and try again.";
+  if (m.includes("should be at least") || m.includes("password")) return "Password must be at least 8 characters.";
+  return (e && e.message) || "Something went wrong. Try again.";
 }
 
 const LEGACY_KEY = "pawsabuy-data"; // kept so data from earlier versions carries over
 
 /* ── app version — bump BOTH lines on every push to GitHub ── */
-const APP_VERSION = "7.9.6";
-const APP_UPDATED = "Aug 13, 2026 · 4:15 PM PHT";
+const APP_VERSION = "8.0.0";
+const APP_UPDATED = "Aug 13, 2026 · 6:20 PM PHT";
 
 /* helpers */
 const roundUp5 = (n) => Math.ceil(n / 5) * 5;
@@ -328,13 +364,11 @@ function ZenPasabuy({ user, onLogout }) {
   const [rateBusy, setRateBusy] = useState(false);
   const [storageWarn, setStorageWarn] = useState(false);
   const [online, setOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine);
-  const [hashOut, setHashOut] = useState("");
   const [dTiers, setDTiers] = useState(null);      // unsaved tier edits
   const [dSourcing, setDSourcing] = useState(null); // unsaved sourcing edits
   const [dShipping, setDShipping] = useState(null); // unsaved shipping-class edits
   const [dBox, setDBox] = useState(null);           // unsaved box-cost edits
   const [guideOpen, setGuideOpen] = useState({});   // per-page tutorial open/closed
-  const [hashPw, setHashPw] = useState("");
   const backupRef = useRef(null);
   const pagePhotoRef = useRef(null);
   const newPhotoRef = useRef(null);
@@ -2860,36 +2894,22 @@ function ZenPasabuy({ user, onLogout }) {
                 Signed in as <b style={{ color: T.primary }}>{user?.name || user?.u}</b>
                 {user?.owner && <span style={{ color: T.muted }}> · owner</span>}
               </div>
-              <div style={{ fontSize: 11, color: T.muted, marginTop: 4 }}>
-                Each account keeps its own data on this device. Signing out doesn't delete anything.
-              </div>
-              <button onClick={onLogout} style={{ ...ghostBtn, width: "100%", marginTop: 10, color: T.accent }}>Sign out</button>
+              <div style={{ fontSize: 11, color: T.muted, marginTop: 4 }}>{user?.email}</div>
 
-              {user?.owner && (
-                <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${T.border}` }}>
-                  <span style={{ ...label, fontSize: 9.5 }}>Add a tester (owner only)</span>
-                  <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 8 }}>
-                    Type a password, copy the generated line, and paste it into the <code>USERS</code> list in the app files, then push to GitHub.
-                  </div>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <input value={hashPw} onChange={(e) => setHashPw(e.target.value)} placeholder="new password" style={{ ...inputStyle, fontSize: 14 }} />
-                    <button
-                      onClick={async () => {
-                        if (!hashPw.trim()) return ping("Type a password first");
-                        const h = await sha256Hex(`${PW_SALT}:${hashPw.trim()}`);
-                        setHashOut(`{ u: "username", name: "Name", h: "${h}" },`);
-                        ping("Line generated — copy it below");
-                      }}
-                      style={{ ...primaryBtn, padding: "11px 16px", fontSize: 13 }}>
-                      Generate
-                    </button>
-                  </div>
-                  {hashOut && (
-                    <textarea readOnly value={hashOut} onFocus={(e) => e.target.select()}
-                      style={{ ...inputStyle, marginTop: 8, fontSize: 11, fontFamily: "ui-monospace, Menlo, monospace", height: 62, resize: "vertical" }} />
-                  )}
-                </div>
-              )}
+              <div style={{ fontSize: 11.5, color: T.muted, marginTop: 8, lineHeight: 1.55 }}>
+                {user?.owner || user?.plan === "lifetime"
+                  ? "Lifetime access. No renewals, ever."
+                  : user?.paid_until
+                    ? `Yearly plan, paid until ${user.paid_until}.`
+                    : "No active plan on record."}
+              </div>
+              <div style={{ fontSize: 11, color: T.muted, marginTop: 6 }}>
+                Your data stays on this device. Signing out doesn't delete anything.
+              </div>
+
+              <AccountSettings user={user} ping={ping} inputStyle={inputStyle} primaryBtn={primaryBtn} ghostBtn={ghostBtn} T={T} />
+
+              <button onClick={onLogout} style={{ ...ghostBtn, width: "100%", marginTop: 10, color: T.accent }}>Sign out</button>
             </div>
 
             <div style={card}>
@@ -2963,40 +2983,74 @@ function ZenPasabuy({ user, onLogout }) {
 }
 
 
-/* ───────────────────────────  LOGIN + ROOT  ───────────────────────────
-   Note: this is a client-side gate for private testing, not real security.
-   Anyone who can read the page source can see the password hashes.
-   Keep it for keeping casual visitors out; real accounts need a backend.
-──────────────────────────────────────────────────────────────────────── */
-function LoginScreen({ onLogin }) {
-  const T = SWEETIES_THEME;
-  const [u, setU] = useState("");
-  const [p, setP] = useState("");
-  const [err, setErr] = useState("");
+/* ── change your own display name and password ─────────────────────────── */
+function AccountSettings({ user, ping, inputStyle, primaryBtn, ghostBtn, T }) {
+  const [open, setOpen] = useState("");           /* "" | name | pw */
+  const [name, setName] = useState(user?.name || "");
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const submit = async () => {
-    setErr("");
-    const name = u.trim().toLowerCase();
-    if (!name || !p) return setErr("Enter your username and password.");
+  const saveName = async () => {
+    const v = name.trim();
+    if (!v) return ping("Type a name first");
+    const client = sb();
+    if (!client) return ping("No connection");
     setBusy(true);
-    try {
-      const found = USERS.find((x) => x.u.toLowerCase() === name);
-      const h = await sha256Hex(`${PW_SALT}:${p}`);
-      if (found && found.h === h) onLogin({ u: found.u, name: found.name || found.u, owner: !!found.owner });
-      else setErr("That username and password don't match.");
-    } catch (e) {
-      setErr("Couldn't sign in on this browser.");
-    }
+    const { error } = await client.from("profiles").update({ display_name: v }).eq("id", (await client.auth.getUser()).data.user.id);
     setBusy(false);
+    if (error) return ping("Couldn't save that name");
+    ping("Name saved — it shows next time you sign in");
+    setOpen("");
   };
 
-  const input = {
-    width: "100%", boxSizing: "border-box", padding: "13px 15px", borderRadius: 12,
-    border: `1.5px solid ${T.border}`, background: T.bg, color: T.ink,
-    fontFamily: "'Quicksand', system-ui, sans-serif", fontSize: 16, fontWeight: 600, outline: "none",
+  const savePw = async () => {
+    if (pw.length < 8) return ping("Use at least 8 characters");
+    if (pw !== pw2) return ping("The two passwords don't match");
+    const client = sb();
+    if (!client) return ping("No connection");
+    setBusy(true);
+    const { error } = await client.auth.updateUser({ password: pw });
+    setBusy(false);
+    if (error) return ping(friendlyAuthError(error));
+    setPw(""); setPw2(""); setOpen("");
+    ping("Password changed");
   };
 
+  const small = { ...ghostBtn, flex: 1, fontSize: 12, padding: "9px 10px" };
+
+  return (
+    <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.border}` }}>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button onClick={() => setOpen(open === "name" ? "" : "name")} style={small}>Change name</button>
+        <button onClick={() => setOpen(open === "pw" ? "" : "pw")} style={small}>Change password</button>
+      </div>
+
+      {open === "name" && (
+        <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Display name" style={{ ...inputStyle, fontSize: 14 }} />
+          <button onClick={saveName} disabled={busy} style={{ ...primaryBtn, padding: "11px 16px", fontSize: 13 }}>{busy ? "Saving…" : "Save name"}</button>
+        </div>
+      )}
+
+      {open === "pw" && (
+        <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+          <input value={pw} onChange={(e) => setPw(e.target.value)} type="password" placeholder="New password" autoComplete="new-password" style={{ ...inputStyle, fontSize: 14 }} />
+          <input value={pw2} onChange={(e) => setPw2(e.target.value)} type="password" placeholder="Type it again" autoComplete="new-password" style={{ ...inputStyle, fontSize: 14 }} />
+          <button onClick={savePw} disabled={busy} style={{ ...primaryBtn, padding: "11px 16px", fontSize: 13 }}>{busy ? "Saving…" : "Save password"}</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ───────────────────────────  LOGIN + ROOT  ───────────────────────────
+   Real accounts, handled by Supabase. Sign in with an email address, change
+   your own password, and reset it by email if you forget. Data still lives
+   only on this device; Supabase is used for nothing but who may come in.
+──────────────────────────────────────────────────────────────────────── */
+function AuthShell({ children, note }) {
+  const T = SWEETIES_THEME;
   return (
     <div style={{ minHeight: "100vh", background: `linear-gradient(180deg, ${T.bg} 0%, ${T.bg2} 100%)`, color: T.ink, fontFamily: "'Quicksand', system-ui, sans-serif", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <style>{`
@@ -3004,61 +3058,295 @@ function LoginScreen({ onLogin }) {
         input::placeholder { color: ${T.pink}; font-weight: 500; }
         input:focus { border-color: ${T.accent} !important; }
       `}</style>
-      <div style={{ width: "100%", maxWidth: 360 }}>
+      <div style={{ width: "100%", maxWidth: 380 }}>
         <div style={{ textAlign: "center", marginBottom: 20 }}>
           <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}><ZenLogo size={72} /></div>
           <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 34, fontWeight: 600, color: T.primary, lineHeight: 1.05 }}>Zen Pasabuy</div>
           <div style={{ fontSize: 12.5, color: T.muted, marginTop: 3, letterSpacing: "0.06em" }}>calm decisions, clear profits</div>
         </div>
-
         <div style={{ background: T.paper, border: `1px solid ${T.border}`, borderRadius: 18, padding: 20, boxShadow: "0 8px 24px rgba(128,29,92,0.10)" }}>
-          <div style={{ display: "grid", gap: 10 }}>
-            <input value={u} onChange={(e) => setU(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} placeholder="Username" autoCapitalize="none" autoCorrect="off" style={input} />
-            <input value={p} onChange={(e) => setP(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} placeholder="Password" type="password" style={input} />
-            {err && <div style={{ color: DANGER, fontSize: 12.5, fontWeight: 700 }}>{err}</div>}
-            <button onClick={submit} disabled={busy}
-              style={{ padding: 13, borderRadius: 14, border: "none", background: `linear-gradient(120deg, ${T.primary}, ${T.accent})`, color: "#fff", fontFamily: "'Quicksand', sans-serif", fontWeight: 700, fontSize: 15, cursor: "pointer" }}>
-              {busy ? "Checking…" : "Sign in"}
-            </button>
-          </div>
-          <div style={{ fontSize: 11, color: T.muted, marginTop: 12, textAlign: "center" }}>
-            Private testing. Ask Niz for an account.
-          </div>
+          {children}
         </div>
-
         <div style={{ textAlign: "center", fontSize: 10.5, color: T.muted, marginTop: 14 }}>
-          v{APP_VERSION} · updated {APP_UPDATED} 🌸
+          {note || <>v{APP_VERSION} · updated {APP_UPDATED} 🌸</>}
         </div>
       </div>
     </div>
   );
 }
 
+const authInput = () => ({
+  width: "100%", boxSizing: "border-box", padding: "13px 15px", borderRadius: 12,
+  border: `1.5px solid ${SWEETIES_THEME.border}`, background: SWEETIES_THEME.bg, color: SWEETIES_THEME.ink,
+  fontFamily: "'Quicksand', system-ui, sans-serif", fontSize: 16, fontWeight: 600, outline: "none",
+});
+const authBtn = () => ({
+  padding: 13, borderRadius: 14, border: "none",
+  background: `linear-gradient(120deg, ${SWEETIES_THEME.primary}, ${SWEETIES_THEME.accent})`,
+  color: "#fff", fontFamily: "'Quicksand', sans-serif", fontWeight: 700, fontSize: 15, cursor: "pointer",
+});
+const linkBtn = () => ({
+  border: "none", background: "transparent", color: SWEETIES_THEME.accent, fontWeight: 700,
+  fontSize: 12, cursor: "pointer", padding: 0, fontFamily: "'Quicksand', sans-serif", textDecoration: "underline",
+});
+
+function LoginScreen() {
+  const T = SWEETIES_THEME;
+  const [mode, setMode] = useState("in");      /* in | forgot | sent */
+  const [email, setEmail] = useState("");
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const signIn = async () => {
+    setErr("");
+    const e = email.trim().toLowerCase();
+    if (!e || !pw) return setErr("Enter your email and password.");
+    const client = sb();
+    if (!client) return setErr("Couldn't reach the sign-in service. Check your connection.");
+    setBusy(true);
+    const { error } = await client.auth.signInWithPassword({ email: e, password: pw });
+    if (error) setErr(friendlyAuthError(error));
+    setBusy(false);
+  };
+
+  const sendReset = async () => {
+    setErr("");
+    const e = email.trim().toLowerCase();
+    if (!e) return setErr("Enter the email address on your account.");
+    const client = sb();
+    if (!client) return setErr("Couldn't reach the sign-in service. Check your connection.");
+    setBusy(true);
+    const { error } = await client.auth.resetPasswordForEmail(e, { redirectTo: appUrl() });
+    if (error) setErr(friendlyAuthError(error));
+    else setMode("sent");
+    setBusy(false);
+  };
+
+  if (mode === "sent") {
+    return (
+      <AuthShell>
+        <div style={{ fontSize: 14, lineHeight: 1.6 }}>
+          <b style={{ color: T.primary }}>Check your email.</b>
+          <div style={{ color: T.muted, marginTop: 6, fontSize: 12.5 }}>
+            If an account exists for {email.trim().toLowerCase()}, a reset link is on its way. It expires in an hour.
+            Look in spam if it hasn't arrived in a few minutes.
+          </div>
+        </div>
+        <button onClick={() => { setMode("in"); setPw(""); }} style={{ ...authBtn(), width: "100%", marginTop: 14 }}>Back to sign in</button>
+      </AuthShell>
+    );
+  }
+
+  if (mode === "forgot") {
+    return (
+      <AuthShell>
+        <div style={{ fontSize: 13, color: T.muted, marginBottom: 10 }}>
+          Enter your email and we'll send you a link to set a new password.
+        </div>
+        <div style={{ display: "grid", gap: 10 }}>
+          <input value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendReset()}
+            placeholder="Email address" type="email" autoCapitalize="none" autoCorrect="off" style={authInput()} />
+          {err && <div style={{ color: DANGER, fontSize: 12.5, fontWeight: 700 }}>{err}</div>}
+          <button onClick={sendReset} disabled={busy} style={authBtn()}>{busy ? "Sending…" : "Send reset link"}</button>
+        </div>
+        <div style={{ textAlign: "center", marginTop: 12 }}>
+          <button onClick={() => { setMode("in"); setErr(""); }} style={linkBtn()}>Back to sign in</button>
+        </div>
+      </AuthShell>
+    );
+  }
+
+  return (
+    <AuthShell>
+      <div style={{ display: "grid", gap: 10 }}>
+        <input value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => e.key === "Enter" && signIn()}
+          placeholder="Email address" type="email" autoCapitalize="none" autoCorrect="off" autoComplete="username" style={authInput()} />
+        <input value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && signIn()}
+          placeholder="Password" type="password" autoComplete="current-password" style={authInput()} />
+        {err && <div style={{ color: DANGER, fontSize: 12.5, fontWeight: 700 }}>{err}</div>}
+        <button onClick={signIn} disabled={busy} style={authBtn()}>{busy ? "Signing in…" : "Sign in"}</button>
+      </div>
+      <div style={{ textAlign: "center", marginTop: 12 }}>
+        <button onClick={() => { setMode("forgot"); setErr(""); }} style={linkBtn()}>Forgot your password?</button>
+      </div>
+      <div style={{ fontSize: 11, color: T.muted, marginTop: 12, textAlign: "center", lineHeight: 1.5 }}>
+        No account yet? Message hello@zenpasabuy.com and I'll set one up once payment is confirmed.
+      </div>
+    </AuthShell>
+  );
+}
+
+/* Shown when someone arrives from a password-reset email. */
+function SetPasswordScreen({ onDone }) {
+  const T = SWEETIES_THEME;
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    setErr("");
+    if (pw.length < 8) return setErr("Use at least 8 characters.");
+    if (pw !== pw2) return setErr("The two passwords don't match.");
+    const client = sb();
+    if (!client) return setErr("Couldn't reach the sign-in service.");
+    setBusy(true);
+    const { error } = await client.auth.updateUser({ password: pw });
+    setBusy(false);
+    if (error) return setErr(friendlyAuthError(error));
+    onDone();
+  };
+
+  return (
+    <AuthShell>
+      <div style={{ fontSize: 14, fontWeight: 700, color: T.primary, marginBottom: 4 }}>Set a new password</div>
+      <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 12 }}>Pick something you'll remember. At least 8 characters.</div>
+      <div style={{ display: "grid", gap: 10 }}>
+        <input value={pw} onChange={(e) => setPw(e.target.value)} placeholder="New password" type="password" autoComplete="new-password" style={authInput()} />
+        <input value={pw2} onChange={(e) => setPw2(e.target.value)} onKeyDown={(e) => e.key === "Enter" && save()} placeholder="Type it again" type="password" autoComplete="new-password" style={authInput()} />
+        {err && <div style={{ color: DANGER, fontSize: 12.5, fontWeight: 700 }}>{err}</div>}
+        <button onClick={save} disabled={busy} style={authBtn()}>{busy ? "Saving…" : "Save password"}</button>
+      </div>
+    </AuthShell>
+  );
+}
+
+/* Shown when a yearly plan has run past its grace period. */
+function ExpiredScreen({ profile, onSignOut }) {
+  const T = SWEETIES_THEME;
+  const key = profile && profile.owner ? LEGACY_KEY : `${LEGACY_KEY}:${(profile && profile.slug) || "guest"}`;
+
+  const exportData = () => {
+    let raw = null;
+    try { raw = localStorage.getItem(key); } catch (e) { /* blocked */ }
+    if (!raw) { alert("Nothing saved on this device yet."); return; }
+    download(`zen-pasabuy-backup-${today()}.json`, raw, "application/json");
+  };
+
+  return (
+    <AuthShell note={<>v{APP_VERSION} 🌸</>}>
+      <div style={{ fontSize: 15, fontWeight: 700, color: T.primary }}>Your year has ended</div>
+      <div style={{ fontSize: 12.5, color: T.muted, marginTop: 8, lineHeight: 1.6 }}>
+        Message <b style={{ color: T.ink }}>hello@zenpasabuy.com</b> to renew and I'll switch you back on, usually the same day.
+      </div>
+      <div style={{ fontSize: 12.5, color: T.muted, marginTop: 10, lineHeight: 1.6 }}>
+        Nothing has been deleted. Every order, product and photo is still on this device, and you can take a full backup right now.
+      </div>
+      <button onClick={exportData} style={{ ...authBtn(), width: "100%", marginTop: 14 }}>Download my data</button>
+      <button onClick={onSignOut} style={{ width: "100%", marginTop: 8, padding: 12, borderRadius: 14, border: `1.5px solid ${T.border}`, background: "transparent", color: T.accent, fontFamily: "'Quicksand', sans-serif", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>Sign out</button>
+    </AuthShell>
+  );
+}
+
+function RenewalBanner({ access, onDismiss }) {
+  const T = SWEETIES_THEME;
+  if (!access || (access.state !== "ending" && access.state !== "grace")) return null;
+  const grace = access.state === "grace";
+  const msg = grace
+    ? `Your year ended. The app stays open for ${GRACE_DAYS + access.days} more day${GRACE_DAYS + access.days === 1 ? "" : "s"}.`
+    : `Your year ends in ${access.days} day${access.days === 1 ? "" : "s"}.`;
+  return (
+    <div style={{ background: grace ? DANGER : T.primary, color: "#fff", padding: "9px 14px", fontFamily: "'Quicksand', system-ui, sans-serif", fontSize: 12.5, fontWeight: 700, display: "flex", alignItems: "center", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
+      <span>{msg} Message hello@zenpasabuy.com to renew.</span>
+      <button onClick={onDismiss} aria-label="Dismiss" style={{ border: "none", background: "rgba(255,255,255,0.22)", color: "#fff", borderRadius: 999, width: 20, height: 20, cursor: "pointer", fontWeight: 700, lineHeight: 1, fontSize: 13 }}>×</button>
+    </div>
+  );
+}
+
 function ZenPasabuyRoot() {
-  const [user, setUser] = useState(null);
-  const [ready, setReady] = useState(false);
+  const [phase, setPhase] = useState("loading");   /* loading | out | recover | in | expired */
+  const [profile, setProfile] = useState(null);
+  const [banner, setBanner] = useState(true);
+
+  const loadProfile = async (client, session) => {
+    /* Try the server, fall back to the cached copy so the app still opens offline. */
+    let row = null;
+    try {
+      const { data } = await client.from("profiles").select("*").eq("id", session.user.id).single();
+      if (data) row = data;
+    } catch (e) { /* offline or blocked */ }
+    if (row) {
+      try { localStorage.setItem(PROFILE_CACHE, JSON.stringify(row)); } catch (e) { /* private mode */ }
+    } else {
+      try {
+        const cached = JSON.parse(localStorage.getItem(PROFILE_CACHE) || "null");
+        if (cached && cached.id === session.user.id) row = cached;
+      } catch (e) { /* none */ }
+    }
+    if (!row) {
+      /* Signed in but no profile row yet: let them in as a plain user. */
+      row = { id: session.user.id, slug: (session.user.email || "guest").split("@")[0], display_name: "", owner: false, plan: "yearly", paid_until: null };
+    }
+    row.email = session.user.email;
+    return row;
+  };
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(SESSION_KEY);
-      if (raw) {
-        const saved = JSON.parse(raw);
-        const still = USERS.find((x) => x.u === saved.u);
-        if (still) setUser({ u: still.u, name: still.name || still.u, owner: !!still.owner });
+    const client = sb();
+    if (!client) { setPhase("out"); return; }
+
+    let cancelled = false;
+
+    const settle = async (session) => {
+      if (!session) { if (!cancelled) { setProfile(null); setPhase("out"); } return; }
+      const row = await loadProfile(client, session);
+      if (cancelled) return;
+      setProfile(row);
+      setPhase(accessState(row).ok ? "in" : "expired");
+    };
+
+    const { data: sub } = client.auth.onAuthStateChange((event, session) => {
+      if (event === "PASSWORD_RECOVERY") { setPhase("recover"); return; }
+      if (event === "SIGNED_OUT") { setProfile(null); setPhase("out"); return; }
+      settle(session);
+    });
+
+    client.auth.getSession().then(({ data }) => {
+      /* A recovery link puts type=recovery in the URL fragment. */
+      if (/type=recovery/.test(window.location.hash) || /type=recovery/.test(window.location.search)) {
+        setPhase("recover");
+        return;
       }
-    } catch (e) { /* no session */ }
-    setReady(true);
+      settle(data && data.session);
+    });
+
+    return () => { cancelled = true; if (sub && sub.subscription) sub.subscription.unsubscribe(); };
   }, []);
 
-  const handleLogin = (u) => {
-    try { localStorage.setItem(SESSION_KEY, JSON.stringify({ u: u.u })); } catch (e) { /* private mode */ }
-    setUser(u);
-  };
-  const handleLogout = () => {
-    try { localStorage.removeItem(SESSION_KEY); } catch (e) { /* ignore */ }
-    setUser(null);
+  const handleSignOut = async () => {
+    const client = sb();
+    try { localStorage.removeItem(PROFILE_CACHE); } catch (e) { /* ignore */ }
+    if (client) await client.auth.signOut();
+    setProfile(null);
+    setPhase("out");
   };
 
-  if (!ready) return <div style={{ minHeight: "100vh", background: SWEETIES_THEME.bg }} />;
-  return user ? <ZenPasabuy user={user} onLogout={handleLogout} /> : <LoginScreen onLogin={handleLogin} />;
+  const afterPasswordSet = () => {
+    try { history.replaceState(null, "", appUrl()); } catch (e) { /* ignore */ }
+    window.location.reload();
+  };
+
+  if (phase === "loading") return <div style={{ minHeight: "100vh", background: SWEETIES_THEME.bg }} />;
+  if (phase === "recover") return <SetPasswordScreen onDone={afterPasswordSet} />;
+  if (phase === "out") return <LoginScreen />;
+  if (phase === "expired") return <ExpiredScreen profile={profile} onSignOut={handleSignOut} />;
+
+  const access = accessState(profile);
+  const user = {
+    u: profile.slug,
+    name: profile.display_name || profile.slug,
+    owner: !!profile.owner,
+    email: profile.email,
+    plan: profile.plan,
+    paid_until: profile.paid_until,
+    access,
+  };
+
+  return (
+    <>
+      {banner && <RenewalBanner access={access} onDismiss={() => setBanner(false)} />}
+      <ZenPasabuy user={user} onLogout={handleSignOut} />
+    </>
+  );
 }
